@@ -2,6 +2,7 @@
 
 Public API re-exports for ergonomic imports.
 """
+__version__ = "0.1.0"
 from .constants import BASE_URL, HEADERS
 from .models import (
     TdnetDisclosure,

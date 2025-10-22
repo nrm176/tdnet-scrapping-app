@@ -1,5 +1,44 @@
 # TDnet Scraping Application
 
+Installable Python package providing a CLI and typed models for scraping Japanese TDnet disclosures.
+
+![CI](https://github.com/nrm176/tdnet-scrapping-app/actions/workflows/ci.yml/badge.svg?branch=main)
+[![PyPI version](https://img.shields.io/pypi/v/tdnet-scraper.svg)](https://pypi.org/project/tdnet-scraper/)
+
+## Quick install
+
+```bash
+pip install tdnet-scraper
+```
+
+## CLI usage
+
+```bash
+tdnet --date 2025-10-21 --output-format structured
+# or JSON
+tdnet --date 2025-10-21 --json
+```
+
+Note: Local workflow via `python main.py` remains supported for backward compatibility and tests.
+
+## CI/CD and publishing
+
+This repo includes GitHub Actions workflows to test, build, and optionally publish releases:
+
+- CI (`.github/workflows/ci.yml`):
+    - Runs tests on Python 3.9–3.13 on pushes and PRs to `main`.
+    - Builds sdist/wheel and uploads them as run artifacts.
+
+- Publish (`.github/workflows/publish.yml`):
+    - On GitHub Release publish: builds and uploads to PyPI.
+    - Manual run: set input `repository` to `testpypi` to publish to TestPyPI.
+
+To enable publishing, add repository secrets in GitHub:
+- `PYPI_API_TOKEN` for PyPI
+- `TEST_PYPI_API_TOKEN` for TestPyPI (optional)
+
+Alternatively, we can switch to PyPI Trusted Publishers (OIDC) if preferred.
+
 A modern, robust Python application for scraping Japanese corporate disclosure data from TDnet (Timely Disclosure Network). Built with cutting-edge **Pydantic V2+** patterns and comprehensive testing infrastructure.
 
 ## 🏗️ Architecture Overview
@@ -47,7 +86,7 @@ A modern, robust Python application for scraping Japanese corporate disclosure d
 - Python 3.8+
 - Virtual environment (recommended)
 
-## 🛠️ Installation
+## 🛠️ Installation (from source)
 
 1. **Clone or download the project**:
    ```bash

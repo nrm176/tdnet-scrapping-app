@@ -86,3 +86,11 @@ def run(argv: list[str] | None = None) -> int:
         return 1
 
     return 0
+
+
+def main() -> None:
+    """Console script entrypoint.
+
+    Wraps run() and ensures proper exit codes when invoked as a script.
+    """
+    sys.exit(run())
