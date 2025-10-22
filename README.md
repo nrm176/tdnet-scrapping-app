@@ -18,6 +18,8 @@ tdnet --date 2025-10-21 --output-format structured
 tdnet --date 2025-10-21 --json
 ```
 
+Tip: If the `tdnet` command isn't found, ensure your virtual environment is activated, or run it directly via the venv path (for example on macOS/Linux: `.venv/bin/tdnet`).
+
 Note: Local workflow via `python main.py` remains supported for backward compatibility and tests.
 
 ## CI and distribution
@@ -78,7 +80,7 @@ A modern, robust Python application for scraping Japanese corporate disclosure d
 - **Hash ID System**: SHA-256 based unique identifiers for database integration
 
 ### Technology Stack
-- **Python 3.10+** with modern type hints and Annotated types
+- **Python 3.9+** with modern type hints and Annotated types
 - **Pydantic 2.12.3** with V2+ patterns (future V3-ready)
 - **BeautifulSoup4** for HTML parsing with lxml backend
 - **Requests** with session management and proper headers
@@ -110,7 +112,7 @@ A modern, robust Python application for scraping Japanese corporate disclosure d
 
 ## 📋 Requirements
 
-- Python 3.8+
+- Python 3.9+
 - Virtual environment (recommended)
 
 ## 🛠️ Installation (from source)
@@ -369,82 +371,76 @@ Each disclosure gets a unique 16-character hash ID based on:
 
 ## 📁 Project Architecture & Structure
 
+The project is organized as a proper Python package with a small back-compat shim at the repository root.
+
 ```
-gemini-scraping-app/
-├── main.py                          # 🔥 Core application (573 lines)
-│   ├── Pydantic Models (Lines 29-216)
-│   │   ├── TdnetDisclosure          # Modern V2+ model with validation
-│   │   └── TdnetScrapingResult      # Container model with computed fields
-│   ├── Utility Functions (Lines 217-382)
-│   │   ├── extract_pdf_urls_from_page      # HTML parsing for PDF URLs
-│   │   ├── extract_structured_data_from_page # HTML parsing for structured data
-│   │   ├── has_next_page                   # Pagination detection
-│   │   └── construct_tdnet_url            # URL construction
-│   ├── Core Scraping (Lines 383-486)
-│   │   └── scrape_tdnet_by_date           # Main scraping orchestrator
-│   └── CLI Interface (Lines 487-573)
-│       └── main()                         # Argument parsing and execution
-├── tests/                           # 🧪 Comprehensive test suite (89% coverage)
-│   ├── __init__.py                  # Package initialization
-│   ├── test_main.py                 # Main test suite (29 test methods)
-│   │   ├── TestTdnetDisclosureModel      # Pydantic model testing
-│   │   ├── TestTdnetScrapingResult       # Container model testing  
-│   │   ├── TestUtilityFunctions          # HTML parsing testing
-│   │   ├── TestScrapingIntegration       # HTTP mocking and integration
-│   │   ├── TestMainFunction              # CLI interface testing
-│   │   └── TestErrorHandling             # Exception and edge cases
-│   ├── mock_tdnet_page.html         # Realistic TDnet HTML structure
-│   ├── mock_empty_page.html         # Edge case testing data
-│   ├── debug_parsing.py             # Debug utilities
-│   ├── test_hash_ids.py             # Hash ID demonstration  
-│   └── test_hash_consistency.py     # Hash consistency verification
-├── requirements.txt                 # 📦 Dependencies with exact versions
-├── .gitignore                      # Git ignore patterns
-├── .pytest_cache/                  # Pytest cache directory
-├── __pycache__/                    # Python bytecode cache
-├── HASH_ID_DOCUMENTATION.md        # Hash ID system documentation
-└── README.md                       # 📚 This comprehensive documentation
+tdnet-scraping-app/
+├── pyproject.toml                 # Packaging (PEP 621), console script entry point
+├── README.md                      # Project documentation and usage
+├── LICENSE                        # MIT license
+├── requirements.txt               # Local/dev dependencies
+├── HASH_ID_DOCUMENTATION.md       # Hash ID system notes
+├── main.py                        # Backward-compatible CLI shim delegating to tdnet.*
+├── tdnet/
+│   ├── __init__.py                # Public API re-exports, __version__
+│   ├── cli.py                     # CLI: run(argv)->int and main()
+│   ├── constants.py               # BASE_URL, HEADERS
+│   ├── models.py                  # Pydantic models and type aliases
+│   ├── parsing.py                 # HTML parsing utilities
+│   └── services.py                # scrape_tdnet_by_date orchestrator
+├── tests/
+│   ├── test_main.py               # Models, parsing, integration, CLI
+│   ├── test_hash_ids.py
+│   ├── test_hash_consistency.py
+│   ├── mock_tdnet_page.html
+│   └── mock_empty_page.html
+└── .github/workflows/
+        ├── ci.yml                     # Test + build artifacts on push/PR
+        ├── publish.yml                # Attach artifacts on Release
+        └── tag-release.yml            # Auto create Release from v* tags
 ```
 
-### Code Organization Principles
+### Module responsibilities
 
-#### 1. **Separation of Concerns**
-- **Models**: Pure data structures with validation (Lines 29-216)
-- **Parsing**: HTML processing utilities (Lines 217-382)  
-- **Orchestration**: High-level scraping logic (Lines 383-486)
-- **Interface**: CLI and user interaction (Lines 487-573)
+- `tdnet.constants` — Constants used across scraping (e.g., `BASE_URL`, `HEADERS`).
+- `tdnet.models` — Pydantic v2 models and type aliases:
+    - `TdnetDisclosure` (validation + computed `id`)
+    - `TdnetScrapingResult` (container with helpers and computed stats)
+- `tdnet.parsing` — HTML parsing utilities:
+    - `extract_pdf_urls_from_page`, `extract_structured_data_from_page`, `has_next_page`
+- `tdnet.services` — Orchestration:
+    - `scrape_tdnet_by_date(date)`: drives pagination, network calls, and parsing
+- `tdnet.cli` — Command-line interface:
+    - `run(argv)->int` for programmatic use and `main()` for the console script
+- `tdnet.__init__` — Public API re-exports for ergonomic imports and `__version__`.
+- `main.py` — Compatibility layer re-exporting symbols under `main.*` used in tests and providing a CLI.
 
-#### 2. **Modern Python Patterns**
-- **Type Hints**: Comprehensive typing with `Annotated` types
-- **Pydantic V2+**: Advanced validation and serialization
-- **Context Managers**: Proper resource management (`requests.Session`)
-- **Error Handling**: Structured exception handling with logging
+### Data flow (high level)
+1) CLI or caller invokes `scrape_tdnet_by_date(date)`
+2) Service constructs per-page URLs and fetches HTML
+3) `parsing` extracts PDF URLs and structured records per page
+4) `models` validate and normalize data; results are aggregated
+5) Result returned as `TdnetScrapingResult` (printable, JSON-serializable)
 
-#### 3. **Testing Architecture**
-```
-tests/test_main.py Structure:
-├── Setup & Fixtures (Lines 1-50)
-│   ├── BaseTestCase                 # Common test setup
-│   ├── Mock HTML data              # Realistic test data  
-│   └── Sample disclosure data      # Pydantic model fixtures
-├── Model Testing (Lines 51-120)
-│   ├── Validation testing          # Field and model validators
-│   ├── Hash ID generation          # Uniqueness and consistency
-│   └── XBRL handling              # Complex validation logic
-├── Utility Testing (Lines 121-280)
-│   ├── HTML parsing accuracy       # BeautifulSoup integration
-│   ├── URL construction           # TDnet URL patterns
-│   └── Pagination detection       # Navigation logic
-├── Integration Testing (Lines 281-350)
-│   ├── HTTP mocking               # requests.Session mocking
-│   ├── End-to-end workflows       # Complete scraping simulation
-│   └── Error scenarios           # Network and parsing failures
-└── CLI Testing (Lines 351-485)
-    ├── Argument parsing           # argparse validation
-    ├── Output formatting          # JSON/text output verification
-    └── Error handling            # Invalid inputs and edge cases
+### Entry points
+- Console script: `tdnet` (installed via `pyproject.toml`)
+- Back-compat: `python main.py --date YYYY-MM-DD ...`
+
+### Public API (import examples)
+```python
+from tdnet import (
+        BASE_URL, HEADERS,
+        TdnetDisclosure, TdnetScrapingResult,
+        CompanyCode, ExchangeCode, DisclosureTime,
+        extract_structured_data_from_page, extract_pdf_urls_from_page, has_next_page,
+        scrape_tdnet_by_date,
+)
 ```
 
+### Testing overview
+- Unit tests cover models, parsing helpers, and error handling
+- Integration tests mock network via `requests.Session`
+- CLI tests validate argument parsing and output formatting
 ## 🧪 Testing Infrastructure (89% Coverage)
 
 ### Test Coverage Breakdown
