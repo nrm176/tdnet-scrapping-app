@@ -3,12 +3,12 @@ import hashlib
 import logging
 import sys
 from datetime import datetime, date
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Annotated
 from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup, Tag
-from pydantic import BaseModel, Field, HttpUrl, model_validator, ConfigDict, computed_field
+from pydantic import BaseModel, Field, HttpUrl, model_validator, ConfigDict, computed_field, field_validator
 
 # Configure logging for clear and informative output
 logging.basicConfig(
@@ -26,24 +26,32 @@ HEADERS = {
 }
 
 
+# Type Aliases using modern Pydantic patterns
+CompanyCode = Annotated[str, Field(pattern=r'^[0-9A-Z]+$', description="Company code (e.g., '26530')")]
+ExchangeCode = Annotated[str, Field(min_length=1, max_length=10, description="Stock exchange code")]
+DisclosureTime = Annotated[str, Field(pattern=r'^\d{1,2}:\d{2}$', description="Disclosure time (HH:MM format)")]
+
 # Pydantic Models for Data Structure
 class TdnetDisclosure(BaseModel):
     """
-    Model representing a TDnet disclosure document.
+    Modern Pydantic V2+ model representing a TDnet disclosure document.
     
-    This model structures the data extracted from TDnet pages and 
-    is designed to be easily integrated with databases in the future.
+    This model uses advanced Pydantic features including:
+    - Annotated types for better validation
+    - Field validators with clear error messages
+    - Computed fields for derived properties
+    - Modern configuration patterns
     """
-    time: str = Field(..., description="Disclosure time (e.g., '19:00')")
-    code: str = Field(..., description="Company code (e.g., '26530')")
-    name: str = Field(..., description="Company name")
-    title: str = Field(..., description="Document title")
-    pdf_url: HttpUrl = Field(..., description="Direct URL to the PDF document")
-    xbrl_available: bool = Field(default=False, description="Whether XBRL data is available")
-    xbrl_url: Optional[HttpUrl] = Field(default=None, description="URL to XBRL file if available")
-    place: str = Field(..., description="Stock exchange (e.g., '東' for Tokyo)")
-    history: str = Field(default="", description="Update history information")
-    disclosure_date: date = Field(..., description="Date of disclosure")
+    time: DisclosureTime
+    code: CompanyCode
+    name: Annotated[str, Field(min_length=1, description="Company name")]
+    title: Annotated[str, Field(min_length=1, description="Document title")]
+    pdf_url: Annotated[HttpUrl, Field(description="Direct URL to the PDF document")]
+    xbrl_available: Annotated[bool, Field(default=False, description="Whether XBRL data is available")]
+    xbrl_url: Annotated[Optional[HttpUrl], Field(default=None, description="URL to XBRL file if available")]
+    place: ExchangeCode
+    history: Annotated[str, Field(default="", description="Update history information")]
+    disclosure_date: Annotated[date, Field(description="Date of disclosure")]
     
     @computed_field
     @property
@@ -67,32 +75,76 @@ class TdnetDisclosure(BaseModel):
         hash_object = hashlib.sha256(unique_string.encode('utf-8'))
         return hash_object.hexdigest()[:16]
     
+    @field_validator('code')
+    @classmethod
+    def validate_company_code(cls, v: str) -> str:
+        """Validate company code format and normalize it."""
+        if not v:
+            raise ValueError("Company code cannot be empty")
+        # Normalize code (remove extra spaces, convert to uppercase)
+        normalized = v.strip().upper()
+        if not normalized:
+            raise ValueError("Company code cannot be just whitespace")
+        return normalized
+    
+    @field_validator('name', 'title')
+    @classmethod
+    def validate_non_empty_strings(cls, v: str) -> str:
+        """Validate that name and title are not empty or just whitespace."""
+        if not v or not v.strip():
+            raise ValueError("Field cannot be empty or just whitespace")
+        return v.strip()
+    
     @model_validator(mode='after')
-    def validate_xbrl_url_when_available(self):
-        """Ensure xbrl_url is provided when xbrl_available is True."""
+    def validate_xbrl_consistency(self):
+        """Ensure XBRL URL is provided when XBRL is available, and vice versa."""
         if self.xbrl_available and self.xbrl_url is None:
             raise ValueError("xbrl_url must be provided when xbrl_available is True")
+        if not self.xbrl_available and self.xbrl_url is not None:
+            raise ValueError("xbrl_url should not be provided when xbrl_available is False")
         return self
     
+    # Modern Pydantic V2+ configuration
     model_config = ConfigDict(
-        # Allow using HttpUrl from pydantic
-        json_encoders={
-            HttpUrl: str
-        },
-        # Example for future database integration
-        # This can be used with SQLAlchemy for table name
-        table_name="tdnet_disclosures"
+        # Strict validation for better type safety
+        str_strip_whitespace=True,
+        validate_assignment=True,
+        # Future-proof configuration
+        extra='forbid',
+        # Database integration metadata
+        table_name="tdnet_disclosures",
+        # JSON schema generation
+        json_schema_extra={
+            "example": {
+                "time": "19:00",
+                "code": "26530",
+                "name": "イオン九州",
+                "title": "完全子会社の吸収合併に関するお知らせ",
+                "pdf_url": "https://www.release.tdnet.info/140120251020576212.pdf",
+                "xbrl_available": False,
+                "xbrl_url": None,
+                "place": "東",
+                "history": "",
+                "disclosure_date": "2025-10-21"
+            }
+        }
     )
 
 
 class TdnetScrapingResult(BaseModel):
     """
-    Model representing the complete result of a TDnet scraping operation.
+    Modern Pydantic V2+ model representing the complete result of a TDnet scraping operation.
+    
+    Uses advanced features:
+    - Annotated types for better validation
+    - Field validators for data consistency
+    - Computed properties for derived data
+    - Comprehensive model validation
     """
-    scraping_date: date = Field(..., description="Date that was scraped")
-    total_disclosures: int = Field(..., description="Total number of disclosures found")
-    disclosures: List[TdnetDisclosure] = Field(..., description="List of disclosure documents")
-    pdf_urls: List[HttpUrl] = Field(..., description="List of unique PDF URLs")
+    scraping_date: Annotated[date, Field(description="Date that was scraped")]
+    total_disclosures: Annotated[int, Field(ge=0, description="Total number of disclosures found")]
+    disclosures: Annotated[List[TdnetDisclosure], Field(description="List of disclosure documents")]
+    pdf_urls: Annotated[List[HttpUrl], Field(description="List of unique PDF URLs")]
     
     @computed_field
     @property
@@ -100,9 +152,73 @@ class TdnetScrapingResult(BaseModel):
         """Count of unique disclosure IDs (should match total_disclosures)."""
         return len(set(disclosure.id for disclosure in self.disclosures))
     
+    @computed_field
+    @property
+    def companies_by_exchange(self) -> Dict[str, int]:
+        """Count of disclosures by exchange."""
+        exchange_count: Dict[str, int] = {}
+        for disclosure in self.disclosures:
+            exchange_count[disclosure.place] = exchange_count.get(disclosure.place, 0) + 1
+        return exchange_count
+    
+    @field_validator('total_disclosures')
+    @classmethod
+    def validate_total_disclosures(cls, v: int) -> int:
+        """Validate that total_disclosures is non-negative."""
+        if v < 0:
+            raise ValueError("Total disclosures cannot be negative")
+        return v
+    
+    @model_validator(mode='after')
+    def validate_consistency(self):
+        """Ensure data consistency across all fields."""
+        # Validate that total_disclosures matches actual count
+        if self.total_disclosures != len(self.disclosures):
+            raise ValueError(f"total_disclosures ({self.total_disclosures}) does not match "
+                           f"actual disclosure count ({len(self.disclosures)})")
+        
+        # Validate that all PDF URLs are unique
+        pdf_url_strs = [str(url) for url in self.pdf_urls]
+        if len(pdf_url_strs) != len(set(pdf_url_strs)):
+            raise ValueError("PDF URLs must be unique")
+        
+        # Validate that main disclosure PDF URLs are included in the pdf_urls list
+        # Note: pdf_urls may contain additional URLs (supplementary docs, etc.)
+        # that are not main disclosure URLs, which is expected behavior
+        disclosure_urls = {str(d.pdf_url) for d in self.disclosures}
+        pdf_urls_set = {str(url) for url in self.pdf_urls}
+        missing_urls = disclosure_urls - pdf_urls_set
+        if missing_urls:
+            raise ValueError(f"Main disclosure PDF URLs missing from pdf_urls list: {missing_urls}")
+        
+        return self
+    
+    # Modern Pydantic V2+ configuration
     model_config = ConfigDict(
-        json_encoders={
-            HttpUrl: str
+        str_strip_whitespace=True,
+        validate_assignment=True,
+        extra='forbid',
+        # Database integration metadata
+        table_name="tdnet_scraping_results",
+        # JSON schema with example
+        json_schema_extra={
+            "example": {
+                "scraping_date": "2025-10-21",
+                "total_disclosures": 2,
+                "disclosures": [
+                    {
+                        "time": "19:00",
+                        "code": "26530",
+                        "name": "イオン九州",
+                        "title": "完全子会社の吸収合併に関するお知らせ",
+                        "pdf_url": "https://www.release.tdnet.info/140120251020576212.pdf",
+                        "xbrl_available": False,
+                        "place": "東",
+                        "disclosure_date": "2025-10-21"
+                    }
+                ],
+                "pdf_urls": ["https://www.release.tdnet.info/140120251020576212.pdf"]
+            }
         }
     )
     
@@ -176,14 +292,23 @@ def extract_structured_data_from_page(soup: BeautifulSoup, disclosure_date: date
                     field_name = class_name[2:].lower()  # Remove 'kj' prefix and lowercase
                     
                     if class_name == 'kjTitle':
-                        # Special handling for title - extract both text and PDF link
-                        link_tag = cell.find('a')
-                        if link_tag:
-                            row_data['title'] = link_tag.get_text(strip=True)
+                        # Special handling for title - extract text and FIRST PDF link only
+                        # Also check for XBRL links in the same cell
+                        link_tags = cell.find_all('a')
+                        row_data['xbrl_available'] = False  # Default to False
+                        
+                        for link_tag in link_tags:
                             href = link_tag.get('href', '')
-                            if href.endswith('.pdf'):
+                            if href.endswith('.pdf') and 'pdf_url' not in row_data:
+                                # Only take the FIRST PDF link as the main disclosure
+                                row_data['title'] = link_tag.get_text(strip=True)
                                 row_data['pdf_url'] = urljoin(BASE_URL, href)
-                        else:
+                            elif href.endswith('.zip'):
+                                row_data['xbrl_url'] = urljoin(BASE_URL, href)
+                                row_data['xbrl_available'] = True
+                        
+                        # If no PDF link found but we have text, use the cell text as title
+                        if 'title' not in row_data:
                             row_data['title'] = cell.get_text(strip=True)
                     elif class_name == 'kjXbrl':
                         # Special handling for XBRL - check if there's a download link
@@ -196,6 +321,9 @@ def extract_structured_data_from_page(soup: BeautifulSoup, disclosure_date: date
                     elif class_name == 'kjHistroy':
                         # Map kjHistroy to 'history' field
                         row_data['history'] = cell.get_text(strip=True)
+                    elif class_name == 'kjCompany':
+                        # Map kjCompany to 'name' field
+                        row_data['name'] = cell.get_text(strip=True)
                     else:
                         # For other fields, just extract the text content
                         row_data[field_name] = cell.get_text(strip=True)
@@ -391,11 +519,10 @@ def main():
 
     try:
         target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
+        logging.info(f"Starting scrape for date: {target_date.strftime('%Y-%m-%d')}")
     except ValueError:
         logging.error("Invalid date format. Please use YYYY-MM-DD.")
         sys.exit(1)
-
-    logging.info(f"Starting scrape for date: {target_date.strftime('%Y-%m-%d')}")
     
     try:
         result = scrape_tdnet_by_date(target_date)
