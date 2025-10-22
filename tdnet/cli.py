@@ -1,4 +1,4 @@
-"""Compatibility shim delegating to the new tdnet package modules, preserving test patch points."""
+"""Command-line interface for TDnet scraping (mirrors original main.py CLI)."""
 from __future__ import annotations
 
 import argparse
@@ -7,36 +7,10 @@ import logging
 import sys
 from datetime import datetime
 
-# Keep 'requests' available under main.* for tests that patch 'main.requests'
-import requests  # noqa: F401
-
-# Re-export public API to keep backward compatibility
-from tdnet.constants import BASE_URL, HEADERS
-from tdnet.models import (
-    TdnetDisclosure,
-    TdnetScrapingResult,
-    CompanyCode,
-    ExchangeCode,
-    DisclosureTime,
-)
-from tdnet.parsing import (
-    extract_structured_data_from_page,
-    extract_pdf_urls_from_page,
-    has_next_page,
-)
-from tdnet.services import scrape_tdnet_by_date
+from .services import scrape_tdnet_by_date
 
 
-# Configure logging similar to original
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stdout,
-)
-
-
-def main() -> None:
-    """CLI entrypoint mirroring original behavior and using refactored services."""
+def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Scrape TDnet for disclosure URLs and structured data on a specific date."
     )
@@ -57,14 +31,15 @@ def main() -> None:
         action="store_true",
         help="Output structured data in JSON format",
     )
-    args = parser.parse_args()
+
+    args = parser.parse_args(argv)
 
     try:
         target_date = datetime.strptime(args.date, "%Y-%m-%d").date()
         logging.info(f"Starting scrape for date: {target_date.strftime('%Y-%m-%d')}")
     except ValueError:
         logging.error("Invalid date format. Please use YYYY-MM-DD.")
-        sys.exit(1)
+        return 1
 
     try:
         result = scrape_tdnet_by_date(target_date)
@@ -108,8 +83,6 @@ def main() -> None:
 
     except Exception as e:
         logging.critical(f"An unexpected error occurred: {e}")
-        sys.exit(1)
+        return 1
 
-
-if __name__ == "__main__":
-    main()
+    return 0
