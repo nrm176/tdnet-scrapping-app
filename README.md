@@ -31,6 +31,9 @@ This repo includes GitHub Actions to test and build distributable packages you c
 - Release artifacts (`.github/workflows/publish.yml`):
     - On GitHub Release publish: builds and attaches `dist/*.whl` and `dist/*.tar.gz` to the Release.
 
+- Tag-based releases (`.github/workflows/tag-release.yml`):
+    - Pushing a tag like `v0.1.1` automatically builds and creates a GitHub Release with packaged artifacts attached.
+
 ### Install via Release assets
 
 1) Go to the GitHub repository Releases page and download the wheel (e.g., `tdnet_scraper-<version>-py3-none-any.whl`).
@@ -39,6 +42,17 @@ This repo includes GitHub Actions to test and build distributable packages you c
 ```bash
 pip install /path/to/tdnet_scraper-<version>-py3-none-any.whl
 ```
+
+### Create a new release (automatic)
+
+1) Push a semantic version tag (replace with your version):
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+2) The "Tag Release" workflow will create a GitHub Release named after the tag and attach the build artifacts.
 
 ### Install via CI artifact
 
