@@ -245,6 +245,26 @@ async def complete_disclosure_file(
     await session.commit()
 
 
+async def complete_disclosure_file_by_id(
+    session: AsyncSession,
+    file_id: int,
+    *,
+    file_size_bytes: int,
+    sha256: str,
+    content_type: str | None,
+) -> None:
+    record = await session.get(DisclosureFileRecord, file_id)
+    if record is None:
+        raise ValueError(f"Disclosure file not found: {file_id}")
+    await complete_disclosure_file(
+        session,
+        record,
+        file_size_bytes=file_size_bytes,
+        sha256=sha256,
+        content_type=content_type,
+    )
+
+
 async def fail_disclosure_file(
     session: AsyncSession,
     record: DisclosureFileRecord,
@@ -254,6 +274,17 @@ async def fail_disclosure_file(
     record.download_attempts += 1
     record.last_download_error = error[:4000]
     await session.commit()
+
+
+async def fail_disclosure_file_by_id(
+    session: AsyncSession,
+    file_id: int,
+    error: str,
+) -> None:
+    record = await session.get(DisclosureFileRecord, file_id)
+    if record is None:
+        raise ValueError(f"Disclosure file not found: {file_id}")
+    await fail_disclosure_file(session, record, error)
 
 
 async def query_disclosure_files(
@@ -327,6 +358,40 @@ async def iter_files_for_parse(
         .limit(limit)
     )
     return list((await session.scalars(stmt)).all())
+
+
+async def count_files_for_parse(
+    session: AsyncSession,
+    *,
+    parser_name: str,
+    parser_version: str,
+    retry_failed: bool = False,
+) -> int:
+    completed_parse = (
+        select(DocumentParseJobRecord.id)
+        .where(DocumentParseJobRecord.file_id == DisclosureFileRecord.id)
+        .where(DocumentParseJobRecord.parser_name == parser_name)
+        .where(DocumentParseJobRecord.parser_version == parser_version)
+        .where(DocumentParseJobRecord.parse_status == "completed")
+        .exists()
+    )
+    failed_parse = (
+        select(DocumentParseJobRecord.id)
+        .where(DocumentParseJobRecord.file_id == DisclosureFileRecord.id)
+        .where(DocumentParseJobRecord.parser_name == parser_name)
+        .where(DocumentParseJobRecord.parser_version == parser_version)
+        .where(DocumentParseJobRecord.parse_status == "failed")
+        .exists()
+    )
+    parse_needed = ~completed_parse if retry_failed else and_(~completed_parse, ~failed_parse)
+    stmt = (
+        select(func.count())
+        .select_from(DisclosureFileRecord)
+        .where(DisclosureFileRecord.file_type == "pdf")
+        .where(DisclosureFileRecord.download_status == "completed")
+        .where(parse_needed)
+    )
+    return int(await session.scalar(stmt) or 0)
 
 
 async def get_or_create_parse_job(

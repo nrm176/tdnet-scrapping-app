@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tdnet.models import TdnetDisclosure
 from tdnet.orm import Base, DisclosureRecord, DocumentParseJobRecord
-from tdnet.parsers import ParsedPdfArtifacts, normalize_markdown, parse_pending_files
+from tdnet.parsers import (
+    ParsedPdfArtifacts,
+    default_parse_workers,
+    get_parser_version,
+    normalize_markdown,
+    parse_pending_files,
+)
 from tdnet.repository import (
     complete_disclosure_file,
     get_or_create_disclosure_file,
@@ -53,7 +59,35 @@ async def _create_completed_pdf(session, storage_path: Path) -> int:
 
 
 def test_normalize_markdown_collapses_repeated_blanks():
-    assert normalize_markdown("  a  \n\n\n| b |\r\n\nc") == "  a\n\n| b |\n\nc\n"
+    assert normalize_markdown("  a  \n\n\n| b |\r\n\nc") == "a\n\n| b |\n\nc\n"
+
+
+def test_parser_version_includes_layout_when_installed(monkeypatch):
+    def fake_version(package_name: str) -> str:
+        if package_name == "pymupdf4llm":
+            return "0.3.4"
+        if package_name == "pymupdf_layout":
+            return "1.27.2.3"
+        raise AssertionError(package_name)
+
+    monkeypatch.setattr("tdnet.parsers.metadata.version", fake_version)
+
+    assert get_parser_version() == "0.3.4+layout-1.27.2.3+tdnet-1"
+
+
+def test_default_parse_workers_uses_cpu_count(monkeypatch):
+    monkeypatch.setattr("tdnet.parsers.os.cpu_count", lambda: 16)
+
+    assert default_parse_workers() == 16
+
+
+def test_process_pool_kwargs_prefers_fork_when_available():
+    from tdnet.parsers import _process_pool_kwargs
+
+    kwargs = _process_pool_kwargs()
+
+    if kwargs:
+        assert kwargs["mp_context"].get_start_method() == "fork"
 
 
 @pytest.mark.asyncio
@@ -110,6 +144,20 @@ async def test_parse_pending_files_marks_completed_and_excludes_next_run(tmp_pat
         assert job.parse_status == "completed"
         assert job.text_path is not None
         assert job.text_sha256 == "b" * 64
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_parse_pending_files_rejects_invalid_worker_count(tmp_path):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        with pytest.raises(ValueError, match="workers"):
+            await parse_pending_files(session, workers=0)
 
     await engine.dispose()
 

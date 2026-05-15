@@ -2,20 +2,25 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import logging
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import mean, median
 from urllib.parse import urlparse
 
-import requests
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .constants import HEADERS
+from .database import SessionLocal
 from .orm import DisclosureRecord
 from .repository import (
-    complete_disclosure_file,
-    fail_disclosure_file,
+    complete_disclosure_file_by_id,
+    fail_disclosure_file_by_id,
     get_or_create_disclosure_file,
     iter_disclosures_for_download,
 )
@@ -23,6 +28,7 @@ from .repository import (
 DEFAULT_BUCKET = "tdnet"
 FORECAST_CORRECTION_BUCKET = "tdnet-forecast-correction"
 FORECAST_CORRECTION_KEYWORDS = ("業績予想", "予想値")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -31,6 +37,26 @@ class DownloadSummary:
     downloaded: int = 0
     skipped: int = 0
     failed: int = 0
+    elapsed_seconds: float = 0.0
+    total_bytes: int = 0
+    average_file_seconds: float = 0.0
+    median_file_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class DownloadTask:
+    file_id: int
+    source_url: str
+    storage_path: Path
+
+
+@dataclass(frozen=True)
+class DownloadResult:
+    status: str
+    file_id: int
+    source_url: str
+    elapsed_seconds: float
+    bytes_downloaded: int = 0
 
 
 def is_forecast_correction(title: str) -> bool:
@@ -75,25 +101,83 @@ def build_storage_path(
     return bucket, root / bucket / folder / filename
 
 
-def _download_file(source_url: str, destination: Path) -> tuple[int, str, str | None]:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    hasher = hashlib.sha256()
-    size = 0
-
-    with requests.get(source_url, headers=HEADERS, stream=True, timeout=60) as response:
-        response.raise_for_status()
-        content_type = response.headers.get("content-type")
+async def _write_bytes(destination: Path, data: bytes) -> None:
+    def write() -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
         temp_destination = destination.with_suffix(destination.suffix + ".tmp")
         with temp_destination.open("wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 256):
-                if not chunk:
-                    continue
-                f.write(chunk)
-                hasher.update(chunk)
-                size += len(chunk)
+            f.write(data)
         temp_destination.replace(destination)
 
-    return size, hasher.hexdigest(), content_type
+    await asyncio.to_thread(write)
+
+
+async def _download_file(
+    client: httpx.AsyncClient,
+    source_url: str,
+    destination: Path,
+) -> tuple[int, str, str | None]:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    response = await client.get(source_url)
+    response.raise_for_status()
+    content = response.content
+    await _write_bytes(destination, content)
+    return len(content), hashlib.sha256(content).hexdigest(), response.headers.get("content-type")
+
+
+async def _run_download_task(
+    task: DownloadTask,
+    client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore,
+) -> DownloadResult:
+    async with semaphore:
+        start = time.perf_counter()
+        try:
+            size, sha256, content_type = await _download_file(
+                client,
+                task.source_url,
+                task.storage_path,
+            )
+            elapsed = time.perf_counter() - start
+            async with SessionLocal() as session:
+                await complete_disclosure_file_by_id(
+                    session,
+                    task.file_id,
+                    file_size_bytes=size,
+                    sha256=sha256,
+                    content_type=content_type,
+                )
+            logger.info(
+                "Downloaded file_id=%s bytes=%s seconds=%.3f path=%s",
+                task.file_id,
+                size,
+                elapsed,
+                task.storage_path,
+            )
+            return DownloadResult(
+                status="downloaded",
+                file_id=task.file_id,
+                source_url=task.source_url,
+                elapsed_seconds=elapsed,
+                bytes_downloaded=size,
+            )
+        except Exception as exc:
+            elapsed = time.perf_counter() - start
+            logger.warning(
+                "Download failed file_id=%s seconds=%.3f url=%s error=%s",
+                task.file_id,
+                elapsed,
+                task.source_url,
+                exc,
+            )
+            async with SessionLocal() as session:
+                await fail_disclosure_file_by_id(session, task.file_id, str(exc))
+            return DownloadResult(
+                status="failed",
+                file_id=task.file_id,
+                source_url=task.source_url,
+                elapsed_seconds=elapsed,
+            )
 
 
 async def download_pending_files(
@@ -102,15 +186,24 @@ async def download_pending_files(
     root: Path | None = None,
     limit: int = 100,
     retry_failed: bool = False,
+    concurrency: int = 8,
 ) -> DownloadSummary:
+    job_start = time.perf_counter()
     download_root = root or Path(get_settings().download_root)
     disclosures = await iter_disclosures_for_download(
         session,
         limit=limit,
         retry_failed=retry_failed,
     )
-    summary = DownloadSummary(candidates=len(disclosures))
-    downloaded = skipped = failed = 0
+    logger.info(
+        "Prepared disclosure download candidates=%s limit=%s concurrency=%s retry_failed=%s",
+        len(disclosures),
+        limit,
+        concurrency,
+        retry_failed,
+    )
+    tasks: list[DownloadTask] = []
+    skipped = 0
 
     for disclosure in disclosures:
         targets: list[tuple[str, str]] = [("pdf", disclosure.pdf_url)]
@@ -139,29 +232,54 @@ async def download_pending_files(
                 and storage_path.exists()
                 and not retry_failed
             ):
+                logger.debug("Skipping completed file_id=%s path=%s", file_record.id, storage_path)
                 skipped += 1
                 continue
             if file_record.download_status == "failed" and not retry_failed:
+                logger.debug("Skipping failed file_id=%s path=%s", file_record.id, storage_path)
                 skipped += 1
                 continue
 
-            try:
-                size, sha256, content_type = _download_file(source_url, storage_path)
-                await complete_disclosure_file(
-                    session,
-                    file_record,
-                    file_size_bytes=size,
-                    sha256=sha256,
-                    content_type=content_type,
+            tasks.append(
+                DownloadTask(
+                    file_id=file_record.id,
+                    source_url=source_url,
+                    storage_path=storage_path,
                 )
-                downloaded += 1
-            except Exception as exc:
-                await fail_disclosure_file(session, file_record, str(exc))
-                failed += 1
+            )
 
+    timeout = httpx.Timeout(60.0, connect=20.0)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=timeout) as client:
+        results: list[DownloadResult] = await asyncio.gather(
+            *(_run_download_task(task, client, semaphore) for task in tasks)
+        )
+
+    elapsed = time.perf_counter() - job_start
+    downloaded_results = [result for result in results if result.status == "downloaded"]
+    failed_results = [result for result in results if result.status == "failed"]
+    durations = [result.elapsed_seconds for result in results]
+    total_bytes = sum(result.bytes_downloaded for result in downloaded_results)
+    throughput = total_bytes / elapsed if elapsed > 0 else 0.0
+    logger.info(
+        "Download statistics scheduled=%s downloaded=%s failed=%s skipped=%s elapsed_seconds=%.3f total_bytes=%s throughput_bytes_per_second=%.2f average_file_seconds=%.3f median_file_seconds=%.3f",
+        len(tasks),
+        len(downloaded_results),
+        len(failed_results),
+        skipped,
+        elapsed,
+        total_bytes,
+        throughput,
+        mean(durations) if durations else 0.0,
+        median(durations) if durations else 0.0,
+    )
     return DownloadSummary(
-        candidates=summary.candidates,
-        downloaded=downloaded,
+        candidates=len(disclosures),
+        downloaded=len(downloaded_results),
         skipped=skipped,
-        failed=failed,
+        failed=len(failed_results),
+        elapsed_seconds=elapsed,
+        total_bytes=total_bytes,
+        average_file_seconds=mean(durations) if durations else 0.0,
+        median_file_seconds=median(durations) if durations else 0.0,
     )

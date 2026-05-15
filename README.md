@@ -49,7 +49,7 @@ GET  /companies/{code}/disclosures
 ```
 
 The API has no auth in v1 and is read-only. Use the CLI to ingest data into
-PostgreSQL. PDF/XBRL file downloading is intentionally left for Phase 2.
+PostgreSQL, download source files, and parse completed PDF downloads.
 
 ## CLI usage
 
@@ -58,6 +58,7 @@ tdnet scrape --date 2026-05-15 --output-format structured
 tdnet scrape --date 2026-05-15 --persist
 tdnet list --date 2026-05-15 --json
 tdnet download --limit 100
+tdnet parse --limit 100 --workers 16
 ```
 
 The legacy form remains supported:
@@ -97,9 +98,49 @@ keeps its original TDnet file stem as the filename:
 ```
 
 Forecast-correction records are detected from TDnet titles containing `業績予想`
-or `予想値`. Parse and analysis state have dedicated tables
-(`document_parse_jobs`, `document_analysis_results`) so Phase 2 can track text
-extraction and downstream analysis without overloading download state.
+or `予想値`.
+
+`tdnet parse` reads completed PDF rows from `disclosure_files`, skips files that
+already have a completed `document_parse_jobs` row for the current
+`pymupdf4llm` parser version, and writes markdown/page artifacts next to the PDF:
+
+```text
+/Volumes/yakushimachi/Downloads/tdnet/140120260515538453/
+  140120260515538453.pdf
+  parsed/
+    pymupdf4llm.<version>.md
+    pymupdf4llm.<version>.pages.json
+    pymupdf4llm.<version>.meta.json
+```
+
+Use `tdnet parse --retry-failed` to retry files with failed parse jobs.
+Analysis state remains separate in `document_analysis_results`, so downstream
+business extraction can evolve without overloading download or parse state.
+Parsing uses worker processes for CPU-bound PDF extraction. By default,
+`tdnet parse` uses the detected CPU count; pass `--workers 16` on a 16-core
+machine to be explicit, or lower it if `pymupdf-layout` memory use is high.
+
+PyMuPDF4LLM may suggest installing `pymupdf-layout` for improved layout
+analysis. It is available as an optional dependency because its license is
+PolyForm Noncommercial or Artifex Commercial:
+
+```bash
+uv run --extra layout tdnet parse --limit 100 --workers 16
+```
+
+When layout is installed, its version is included in the parser identity, so
+layout-enabled parses are tracked separately from earlier markdown artifacts.
+
+CLI jobs write runtime logs to:
+
+```text
+logs/tdnet.log
+```
+
+The file rotates at roughly 10 MB with 10 backups, and the `logs/` directory is
+ignored by Git. Download jobs log per-file timing plus a final statistics line
+with elapsed seconds, bytes downloaded, throughput, average file seconds, and
+median file seconds.
 
 ## CI and distribution
 

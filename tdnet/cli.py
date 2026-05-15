@@ -10,10 +10,12 @@ from datetime import date, datetime
 
 from .artifacts import download_pending_files
 from .database import SessionLocal, init_db
+from .logging_config import configure_logging
 from .models import TdnetDisclosure, TdnetScrapingResult
-from .parsers import parse_pending_files
+from .parsers import default_parse_workers, parse_pending_files
 from .repository import count_disclosures, query_disclosures, upsert_disclosures
 from .services import scrape_tdnet_by_date
+from .stats_logging import format_seconds
 
 
 def _parse_date(value: str) -> date:
@@ -118,42 +120,86 @@ async def _list_persisted(args: argparse.Namespace) -> int:
 
 async def _download_persisted(args: argparse.Namespace) -> int:
     await init_db()
+    logging.info(
+        "Starting download job limit=%s concurrency=%s retry_failed=%s root=%s",
+        args.limit,
+        args.concurrency,
+        args.retry_failed,
+        args.root,
+    )
     async with SessionLocal() as session:
         summary = await download_pending_files(
             session,
             root=Path(args.root) if args.root else None,
             limit=args.limit,
             retry_failed=args.retry_failed,
+            concurrency=args.concurrency,
         )
+    logging.info(
+        "Finished download job candidates=%s downloaded=%s skipped=%s failed=%s",
+        summary.candidates,
+        summary.downloaded,
+        summary.skipped,
+        summary.failed,
+    )
     print(f"Candidate disclosures: {summary.candidates}")
     print(f"Downloaded files: {summary.downloaded}")
     print(f"Skipped files: {summary.skipped}")
     print(f"Failed files: {summary.failed}")
+    print(f"Elapsed seconds: {summary.elapsed_seconds:.2f}")
+    print(f"Downloaded bytes: {summary.total_bytes}")
+    print(f"Average file seconds: {summary.average_file_seconds:.3f}")
+    print(f"Median file seconds: {summary.median_file_seconds:.3f}")
     return 1 if summary.failed else 0
 
 
 async def _parse_downloaded(args: argparse.Namespace) -> int:
     await init_db()
+    logging.info(
+        "Starting parse job limit=%s workers=%s retry_failed=%s",
+        args.limit,
+        args.workers,
+        args.retry_failed,
+    )
     async with SessionLocal() as session:
         summary = await parse_pending_files(
             session,
             limit=args.limit,
             retry_failed=args.retry_failed,
+            workers=args.workers,
         )
+    logging.info(
+        "Finished parse job candidates=%s parsed=%s skipped=%s failed=%s elapsed_seconds=%.3f estimated_remaining=%s",
+        summary.candidates,
+        summary.parsed,
+        summary.skipped,
+        summary.failed,
+        summary.elapsed_seconds,
+        format_seconds(summary.estimated_remaining_seconds),
+    )
+    print(f"Total pending files: {summary.total_pending}")
     print(f"Candidate files: {summary.candidates}")
     print(f"Parsed files: {summary.parsed}")
     print(f"Skipped files: {summary.skipped}")
     print(f"Failed files: {summary.failed}")
+    print(f"Elapsed seconds: {summary.elapsed_seconds:.2f}")
+    print(f"Files per second: {summary.files_per_second:.3f}")
+    print(f"Average file seconds: {summary.average_file_seconds:.3f}")
+    print(f"Median file seconds: {summary.median_file_seconds:.3f}")
+    print(f"Estimated total time: {format_seconds(summary.estimated_total_seconds)}")
+    print(f"Estimated remaining time: {format_seconds(summary.estimated_remaining_seconds)}")
     return 1 if summary.failed else 0
 
 
 def _run_scrape(args: argparse.Namespace) -> int:
+    logging.info("Starting scrape date=%s persist=%s", args.date, args.persist)
     result = scrape_tdnet_by_date(args.date)
     _print_scrape_result(result, args.output_format, args.json)
 
     if args.persist:
         persisted_count = asyncio.run(_persist_result(result))
         print(f"\nPersisted disclosures: {persisted_count}")
+        logging.info("Persisted disclosures date=%s count=%s", args.date, persisted_count)
 
     if not result.pdf_urls and not result.disclosures:
         logging.info("No data found for the specified date.")
@@ -196,6 +242,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Download pending PDF/XBRL files for persisted disclosures.",
     )
     download_parser.add_argument("--limit", type=int, default=100)
+    download_parser.add_argument("--concurrency", type=int, default=8)
     download_parser.add_argument(
         "--root",
         help="Override download root. Defaults to TDNET_DOWNLOAD_ROOT.",
@@ -212,6 +259,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Parse completed PDF downloads into markdown artifacts.",
     )
     parse_parser.add_argument("--limit", type=int, default=100)
+    parse_parser.add_argument(
+        "--workers",
+        type=int,
+        default=default_parse_workers(),
+        help="Number of parser worker processes. Defaults to detected CPU cores.",
+    )
     parse_parser.add_argument(
         "--retry-failed",
         action="store_true",
@@ -233,6 +286,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def run(argv: list[str] | None = None) -> int:
+    log_path = configure_logging()
+    logging.info("Logging to %s", log_path)
     parser = _build_parser()
     args = parser.parse_args(argv)
 

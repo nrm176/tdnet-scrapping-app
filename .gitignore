@@ -218,6 +218,9 @@ $RECYCLE.BIN/
 
 # Scraped data files
 data/
+
+# Runtime logs
+logs/
 output/
 downloads/
 *.json
