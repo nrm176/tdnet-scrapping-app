@@ -11,6 +11,8 @@ from bs4 import BeautifulSoup
 from .constants import BASE_URL
 from .models import TdnetDisclosure
 
+INBS_BASE_URL = f"{BASE_URL}/inbs/"
+
 
 def extract_structured_data_from_page(soup: BeautifulSoup, disclosure_date: date) -> List[TdnetDisclosure]:
     """Parse BeautifulSoup of a page into structured TdnetDisclosure objects (first PDF per row)."""
@@ -43,9 +45,9 @@ def extract_structured_data_from_page(soup: BeautifulSoup, disclosure_date: date
                             href = link_tag.get('href', '')
                             if href.endswith('.pdf') and 'pdf_url' not in row_data:
                                 row_data['title'] = link_tag.get_text(strip=True)
-                                row_data['pdf_url'] = urljoin(BASE_URL, href)
+                                row_data['pdf_url'] = urljoin(INBS_BASE_URL, href)
                             elif href.endswith('.zip'):
-                                row_data['xbrl_url'] = urljoin(BASE_URL, href)
+                                row_data['xbrl_url'] = urljoin(INBS_BASE_URL, href)
                                 row_data['xbrl_available'] = True
 
                         if 'title' not in row_data:
@@ -53,7 +55,7 @@ def extract_structured_data_from_page(soup: BeautifulSoup, disclosure_date: date
                     elif class_name == 'kjXbrl':
                         xbrl_link = cell.find('a')
                         if xbrl_link and xbrl_link.get('href', '').endswith('.zip'):
-                            row_data['xbrl_url'] = urljoin(BASE_URL, xbrl_link['href'])
+                            row_data['xbrl_url'] = urljoin(INBS_BASE_URL, xbrl_link['href'])
                             row_data['xbrl_available'] = True
                         else:
                             row_data['xbrl_available'] = False
@@ -96,7 +98,7 @@ def extract_pdf_urls_from_page(soup: BeautifulSoup) -> List[str]:
                 if link_tag and 'href' in link_tag.attrs:
                     href = link_tag['href']
                     if href.endswith('.pdf'):
-                        urls.append(urljoin(BASE_URL, href))
+                        urls.append(urljoin(INBS_BASE_URL, href))
 
     logging.info(f"Found {len(urls)} PDF URLs on this page.")
     return urls

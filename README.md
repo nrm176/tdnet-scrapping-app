@@ -1,26 +1,105 @@
 # TDnet Scraping Application
 
-Installable Python package providing a CLI and typed models for scraping Japanese TDnet disclosures.
+Canonical TDnet service for scraping Japanese disclosure metadata, persisting it
+to PostgreSQL, and serving it through a read-only FastAPI API.
 
 ![CI](https://github.com/nrm176/tdnet-scrapping-app/actions/workflows/ci.yml/badge.svg?branch=main)
 
 ## Quick install
 
 ```bash
-pip install tdnet-scraper
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
+
+## Local Postgres
+
+The bundled Compose file publishes Postgres on host port `55432` by default so
+it does not collide with a local Postgres on `5432`.
+
+```bash
+cp .env.example .env
+docker compose up -d postgres
+```
+
+The default application database URL is:
+
+```text
+postgresql+asyncpg://tdnet:tdnet@localhost:55432/tdnet
+```
+
+## API usage
+
+Start the FastAPI app:
+
+```bash
+uvicorn tdnet.api:app --reload
+```
+
+Useful endpoints:
+
+```text
+GET  /health
+GET  /disclosures?date=2026-05-15
+GET  /disclosures?from=2026-05-01&to=2026-05-15
+GET  /disclosures/{id}
+GET  /disclosure-files?download_status=completed
+GET  /companies/{code}/disclosures
+```
+
+The API has no auth in v1 and is read-only. Use the CLI to ingest data into
+PostgreSQL. PDF/XBRL file downloading is intentionally left for Phase 2.
 
 ## CLI usage
 
 ```bash
-tdnet --date 2025-10-21 --output-format structured
-# or JSON
-tdnet --date 2025-10-21 --json
+tdnet scrape --date 2026-05-15 --output-format structured
+tdnet scrape --date 2026-05-15 --persist
+tdnet list --date 2026-05-15 --json
+tdnet download --limit 100
+```
+
+The legacy form remains supported:
+
+```bash
+tdnet --date 2026-05-15 --output-format urls
 ```
 
 Tip: If the `tdnet` command isn't found, ensure your virtual environment is activated, or run it directly via the venv path (for example on macOS/Linux: `.venv/bin/tdnet`).
 
 Note: Local workflow via `python main.py` remains supported for backward compatibility and tests.
+
+## Downloaded files and processing state
+
+`tdnet download` reads persisted disclosure records from Postgres, downloads
+missing PDF/XBRL files, and stores artifact state in `disclosure_files`. The
+default root is:
+
+```text
+/Volumes/yakushimachi/Downloads
+```
+
+Files are bucketed under:
+
+```text
+/Volumes/yakushimachi/Downloads/tdnet
+/Volumes/yakushimachi/Downloads/tdnet-forecast-correction
+```
+
+Each disclosure uses the PDF file stem as its folder, and each source artifact
+keeps its original TDnet file stem as the filename:
+
+```text
+/Volumes/yakushimachi/Downloads/tdnet/140120260515538453/
+  140120260515538453.pdf
+  081220260515538453.zip
+```
+
+Forecast-correction records are detected from TDnet titles containing `業績予想`
+or `予想値`. Parse and analysis state have dedicated tables
+(`document_parse_jobs`, `document_analysis_results`) so Phase 2 can track text
+extraction and downstream analysis without overloading download state.
 
 ## CI and distribution
 
@@ -172,7 +251,7 @@ Total disclosures found: 103
 Company: イオン九州 (26530)
 Time: 19:00
 Title: 完全子会社の吸収合併（簡易合併）及び債権放棄に関するお知らせ
-PDF: https://www.release.tdnet.info/140120251020576212.pdf
+PDF: https://www.release.tdnet.info/inbs/140120251020576212.pdf
 XBRL Available: No
 Place: 東
 ID: 623174ebb73b3a3f
@@ -195,7 +274,7 @@ python main.py --date=2025-10-21 --json
       "code": "26530",
       "name": "イオン九州",
       "title": "完全子会社の吸収合併（簡易合併）及び債権放棄に関するお知らせ",
-      "pdf_url": "https://www.release.tdnet.info/140120251020576212.pdf",
+      "pdf_url": "https://www.release.tdnet.info/inbs/140120251020576212.pdf",
       "xbrl_available": false,
       "place": "東",
       "history": "",
@@ -217,8 +296,8 @@ python main.py --date=2025-10-21 --output-format=urls
 --- PDF URLs ---
 Total URLs found: 103
 ---------------
-https://www.release.tdnet.info/140120251020576212.pdf
-https://www.release.tdnet.info/140120251021576595.pdf
+https://www.release.tdnet.info/inbs/140120251020576212.pdf
+https://www.release.tdnet.info/inbs/140120251021576595.pdf
 ...
 ```
 

@@ -20,7 +20,7 @@ The hash ID is generated from these key identifying attributes:
 
 ### Example Hash Generation
 ```
-Input String: "26530_2025-10-21_https://www.release.tdnet.info/140120251020576212.pdf_19:00"
+Input String: "26530_2025-10-21_https://www.release.tdnet.info/inbs/140120251020576212.pdf_19:00"
 SHA-256 Hash: 623174ebb73b3a3f4d2e1a8b9c0d5e6f7a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6
 Hash ID: "623174ebb73b3a3f"
 ```

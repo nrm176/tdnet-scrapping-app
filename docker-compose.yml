@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: tdnet-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tdnet}
+      POSTGRES_USER: ${POSTGRES_USER:-tdnet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tdnet}
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - tdnet-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tdnet} -d ${POSTGRES_DB:-tdnet}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  tdnet-postgres-data:

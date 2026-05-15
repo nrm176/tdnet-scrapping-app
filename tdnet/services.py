@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup

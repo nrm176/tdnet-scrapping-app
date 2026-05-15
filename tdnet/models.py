@@ -72,7 +72,7 @@ class TdnetDisclosure(BaseModel):
                 "code": "26530",
                 "name": "イオン九州",
                 "title": "完全子会社の吸収合併に関するお知らせ",
-                "pdf_url": "https://www.release.tdnet.info/140120251020576212.pdf",
+                "pdf_url": "https://www.release.tdnet.info/inbs/140120251020576212.pdf",
                 "xbrl_available": False,
                 "xbrl_url": None,
                 "place": "東",
@@ -145,13 +145,13 @@ class TdnetScrapingResult(BaseModel):
                         "code": "26530",
                         "name": "イオン九州",
                         "title": "完全子会社の吸収合併に関するお知らせ",
-                        "pdf_url": "https://www.release.tdnet.info/140120251020576212.pdf",
+                        "pdf_url": "https://www.release.tdnet.info/inbs/140120251020576212.pdf",
                         "xbrl_available": False,
                         "place": "東",
                         "disclosure_date": "2025-10-21"
                     }
                 ],
-                "pdf_urls": ["https://www.release.tdnet.info/140120251020576212.pdf"]
+                "pdf_urls": ["https://www.release.tdnet.info/inbs/140120251020576212.pdf"]
             }
         }
     )

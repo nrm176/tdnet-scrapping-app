@@ -10,7 +10,7 @@ import sys
 import os
 import unittest
 from unittest.mock import patch, MagicMock, mock_open
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 # Add the parent directory to sys.path to import main
@@ -50,7 +50,7 @@ class TestTdnetScraping(unittest.TestCase):
             "code": "12345",
             "name": "テスト株式会社",
             "title": "業績予想の修正に関するお知らせ",
-            "pdf_url": "https://www.release.tdnet.info/140120251021001001.pdf",
+            "pdf_url": "https://www.release.tdnet.info/inbs/140120251021001001.pdf",
             "xbrl_available": False,
             "place": "東",
             "history": "",
@@ -76,7 +76,7 @@ class TestTdnetDisclosureModel(TestTdnetScraping):
         data = self.sample_disclosure_data.copy()
         data.update({
             "xbrl_available": True,
-            "xbrl_url": "https://www.release.tdnet.info/081220251021001002.zip"
+            "xbrl_url": "https://www.release.tdnet.info/inbs/081220251021001002.zip"
         })
         
         disclosure = TdnetDisclosure(**data)
@@ -139,16 +139,16 @@ class TestTdnetScrapingResult(TestTdnetScraping):
                 "code": "67890",
                 "name": "サンプル工業株式会社",
                 "time": "16:00",
-                "pdf_url": "https://www.release.tdnet.info/140120251021001002.pdf",
+                "pdf_url": "https://www.release.tdnet.info/inbs/140120251021001002.pdf",
                 "xbrl_available": True,
-                "xbrl_url": "https://www.release.tdnet.info/081220251021001002.zip"
+                "xbrl_url": "https://www.release.tdnet.info/inbs/081220251021001002.zip"
             }),
             TdnetDisclosure(**{
                 **self.sample_disclosure_data,
                 "code": "99999",
                 "name": "テスト札幌",
                 "time": "09:00",
-                "pdf_url": "https://www.release.tdnet.info/140120251021001003.pdf",
+                "pdf_url": "https://www.release.tdnet.info/inbs/140120251021001003.pdf",
                 "place": "札"
             })
         ]
@@ -239,11 +239,11 @@ class TestUtilityFunctions(TestTdnetScraping):
         urls = extract_pdf_urls_from_page(soup)
         
         expected_urls = [
-            "https://www.release.tdnet.info/140120251021001001.pdf",
-            "https://www.release.tdnet.info/140120251021001002.pdf",
-            "https://www.release.tdnet.info/140120251021001003.pdf",
-            "https://www.release.tdnet.info/140120251021001005.pdf",
-            "https://www.release.tdnet.info/140120251021001006.pdf"
+            "https://www.release.tdnet.info/inbs/140120251021001001.pdf",
+            "https://www.release.tdnet.info/inbs/140120251021001002.pdf",
+            "https://www.release.tdnet.info/inbs/140120251021001003.pdf",
+            "https://www.release.tdnet.info/inbs/140120251021001005.pdf",
+            "https://www.release.tdnet.info/inbs/140120251021001006.pdf"
         ]
         
         self.assertEqual(urls, expected_urls)
@@ -275,7 +275,7 @@ class TestUtilityFunctions(TestTdnetScraping):
         second = disclosures[1]
         self.assertEqual(second.code, "67890")
         self.assertTrue(second.xbrl_available)
-        self.assertEqual(str(second.xbrl_url), "https://www.release.tdnet.info/081220251021001002.zip")
+        self.assertEqual(str(second.xbrl_url), "https://www.release.tdnet.info/inbs/081220251021001002.zip")
         
         # Test different exchange
         fourth = disclosures[3]
@@ -373,7 +373,7 @@ class TestMainFunction(TestTdnetScraping):
             scraping_date=self.test_date,
             total_disclosures=1,
             disclosures=mock_disclosures,
-            pdf_urls=["https://www.release.tdnet.info/140120251021001001.pdf"]
+            pdf_urls=["https://www.release.tdnet.info/inbs/140120251021001001.pdf"]
         )
         mock_scrape.return_value = mock_result
         
@@ -408,7 +408,7 @@ class TestMainFunction(TestTdnetScraping):
             scraping_date=self.test_date,
             total_disclosures=1,
             disclosures=mock_disclosures,
-            pdf_urls=["https://www.release.tdnet.info/140120251021001001.pdf"]
+            pdf_urls=["https://www.release.tdnet.info/inbs/140120251021001001.pdf"]
         )
         mock_scrape.return_value = mock_result
         
@@ -428,7 +428,7 @@ class TestMainFunction(TestTdnetScraping):
             scraping_date=self.test_date,
             total_disclosures=1,
             disclosures=mock_disclosures,
-            pdf_urls=["https://www.release.tdnet.info/140120251021001001.pdf"]
+            pdf_urls=["https://www.release.tdnet.info/inbs/140120251021001001.pdf"]
         )
         mock_scrape.return_value = mock_result
         
