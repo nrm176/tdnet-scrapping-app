@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>適時開示情報閲覧サービス</title>
+    <meta charset="utf-8">
+</head>
+<body>
+    <table id="main-list-table">
+        <tbody>
+            <!-- Mock disclosure 1: Regular disclosure without XBRL -->
+            <tr>
+                <td class="kjTime">15:30</td>
+                <td class="kjCode">12345</td>
+                <td class="kjCompany">テスト株式会社</td>
+                <td class="kjTitle">
+                    <a href="https://www.release.tdnet.info/140120251021001001.pdf" target="_blank">
+                        業績予想の修正に関するお知らせ
+                    </a>
+                </td>
+                <td class="kjPlace">東</td>
+                <td class="kjHistory"></td>
+            </tr>
+            
+            <!-- Mock disclosure 2: With XBRL data -->
+            <tr>
+                <td class="kjTime">16:00</td>
+                <td class="kjCode">67890</td>
+                <td class="kjCompany">サンプル工業株式会社</td>
+                <td class="kjTitle">
+                    <a href="https://www.release.tdnet.info/140120251021001002.pdf" target="_blank">
+                        2026年3月期第2四半期決算短信〔日本基準〕（連結）
+                    </a>
+                    <a href="https://www.release.tdnet.info/081220251021001002.zip" target="_blank">
+                        <img src="/images/xbrl.gif" alt="XBRL">
+                    </a>
+                </td>
+                <td class="kjPlace">東</td>
+                <td class="kjHistory"></td>
+            </tr>
+            
+            <!-- Mock disclosure 3: Multiple links (only first PDF should be captured) -->
+            <tr>
+                <td class="kjTime">17:45</td>
+                <td class="kjCode">11111</td>
+                <td class="kjCompany">モック株式会社</td>
+                <td class="kjTitle">
+                    <a href="https://www.release.tdnet.info/140120251021001003.pdf" target="_blank">
+                        子会社の設立に関するお知らせ
+                    </a>
+                    <a href="https://www.release.tdnet.info/140120251021001004.pdf" target="_blank">
+                        補足資料
+                    </a>
+                </td>
+                <td class="kjPlace">東名</td>
+                <td class="kjHistory">訂正</td>
+            </tr>
+            
+            <!-- Mock disclosure 4: Different exchange -->
+            <tr>
+                <td class="kjTime">09:00</td>
+                <td class="kjCode">99999</td>
+                <td class="kjCompany">テスト札幌</td>
+                <td class="kjTitle">
+                    <a href="https://www.release.tdnet.info/140120251021001005.pdf" target="_blank">
+                        役員の異動に関するお知らせ
+                    </a>
+                </td>
+                <td class="kjPlace">札</td>
+                <td class="kjHistory"></td>
+            </tr>
+            
+            <!-- Mock disclosure 5: XBRL with different format -->
+            <tr>
+                <td class="kjTime">14:00</td>
+                <td class="kjCode">55555</td>
+                <td class="kjCompany">ＲＥＩＴ投資法人</td>
+                <td class="kjTitle">
+                    <a href="https://www.release.tdnet.info/140120251021001006.pdf" target="_blank">
+                        2025年8月期 決算短信（ＲＥＩＴ）
+                    </a>
+                    <a href="https://www.release.tdnet.info/091220251021001006.zip" target="_blank">
+                        <img src="/images/xbrl.gif">
+                    </a>
+                </td>
+                <td class="kjPlace">東</td>
+                <td class="kjHistory"></td>
+            </tr>
+        </tbody>
+    </table>
+    
+    <!-- Pagination control indicating there's a next page -->
+    <div class="pager-R" onclick="window.location.href='I_list_002_20251022.html'">次へ</div>
+    
+</body>
+</html>
