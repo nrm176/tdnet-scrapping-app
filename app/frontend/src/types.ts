@@ -5,6 +5,17 @@ export type ParserOption = {
   parse_texts: number;
 };
 
+export type ReportCalendarDay = {
+  disclosure_date: string;
+  record_count: number;
+  report_count: number;
+};
+
+export type ReportCalendarResponse = {
+  month: string;
+  days: ReportCalendarDay[];
+};
+
 export type ParseSearchResult = {
   parse_job_id: number;
   file_id: number;

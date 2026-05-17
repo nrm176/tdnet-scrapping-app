@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -7,19 +8,28 @@ import {
   FileText,
   RefreshCw,
   Search,
+  X,
 } from "lucide-react";
 import {
   fetchParseJob,
   fetchParsers,
+  fetchReportCalendar,
   fetchReviewQueue,
   pageImageUrl,
   searchParseTexts,
 } from "./api";
-import type { ParseJobDetail, ParseSearchResult, ParserOption } from "./types";
+import type { ParseJobDetail, ParseSearchResult, ParserOption, ReportCalendarDay } from "./types";
 
 type ParserSelection = {
   parserName?: string;
   parserVersion?: string;
+};
+
+type CalendarCell = {
+  date: string;
+  day: number;
+  isCurrentMonth: boolean;
+  isWeekend: boolean;
 };
 
 function parserKey(option: ParserOption): string {
@@ -38,6 +48,48 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
+function formatDateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function currentMonthKey(): string {
+  return formatDateKey(new Date()).slice(0, 7);
+}
+
+function addMonths(monthKey: string, delta: number): string {
+  const [year, month] = monthKey.split("-").map(Number);
+  return formatDateKey(new Date(year, month - 1 + delta, 1)).slice(0, 7);
+}
+
+function formatMonth(monthKey: string): string {
+  const [year, month] = monthKey.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(
+    new Date(year, month - 1, 1),
+  );
+}
+
+function buildCalendarCells(monthKey: string): CalendarCell[] {
+  const [year, month] = monthKey.split("-").map(Number);
+  const firstOfMonth = new Date(year, month - 1, 1);
+  const mondayOffset = (firstOfMonth.getDay() + 6) % 7;
+  const startDate = new Date(year, month - 1, 1 - mondayOffset);
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(startDate);
+    date.setDate(startDate.getDate() + index);
+    const dayOfWeek = date.getDay();
+    return {
+      date: formatDateKey(date),
+      day: date.getDate(),
+      isCurrentMonth: date.getMonth() === month - 1,
+      isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
+    };
+  });
+}
+
 function App() {
   const [parsers, setParsers] = useState<ParserOption[]>([]);
   const [parserValue, setParserValue] = useState("");
@@ -45,21 +97,43 @@ function App() {
   const [code, setCode] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [calendarMonth, setCalendarMonth] = useState(currentMonthKey());
+  const [calendarDays, setCalendarDays] = useState<ReportCalendarDay[]>([]);
   const [results, setResults] = useState<ParseSearchResult[]>([]);
   const [total, setTotal] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<ParseJobDetail | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [calendarLoading, setCalendarLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const parserSelection = useMemo(() => parseParserKey(parserValue), [parserValue]);
   const selectedPage = detail?.pages[pageIndex] ?? detail?.pages[0] ?? null;
   const visibleText = selectedPage?.markdown || detail?.content_text || "";
+  const calendarCells = useMemo(() => buildCalendarCells(calendarMonth), [calendarMonth]);
+  const calendarRecordCounts = useMemo(
+    () => new Map(calendarDays.map((day) => [day.disclosure_date, day.record_count])),
+    [calendarDays],
+  );
+  const calendarReportCounts = useMemo(
+    () => new Map(calendarDays.map((day) => [day.disclosure_date, day.report_count])),
+    [calendarDays],
+  );
+  const calendarRecordTotal = useMemo(
+    () => calendarDays.reduce((sum, day) => sum + day.record_count, 0),
+    [calendarDays],
+  );
+  const calendarReportTotal = useMemo(
+    () => calendarDays.reduce((sum, day) => sum + day.report_count, 0),
+    [calendarDays],
+  );
+  const selectedDate = dateFrom && dateFrom === dateTo ? dateFrom : "";
 
   async function loadParsers() {
     const options = await fetchParsers();
+    setError(null);
     setParsers(options);
     if (!parserValue && options.length) {
       setParserValue(parserKey(options[0]));
@@ -84,16 +158,35 @@ function App() {
     }
   }
 
-  async function runSearch(event?: FormEvent) {
+  async function loadCalendar() {
+    setCalendarLoading(true);
+    try {
+      const response = await fetchReportCalendar({
+        month: calendarMonth,
+        code,
+        ...parserSelection,
+      });
+      setError(null);
+      setCalendarDays(response.days);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load calendar");
+    } finally {
+      setCalendarLoading(false);
+    }
+  }
+
+  async function runSearch(event?: FormEvent, overrides: { dateFrom?: string; dateTo?: string } = {}) {
     event?.preventDefault();
     setLoading(true);
     setError(null);
+    const nextDateFrom = overrides.dateFrom ?? dateFrom;
+    const nextDateTo = overrides.dateTo ?? dateTo;
     try {
       const response = await searchParseTexts({
         q: query,
         code,
-        dateFrom,
-        dateTo,
+        dateFrom: nextDateFrom,
+        dateTo: nextDateTo,
         ...parserSelection,
         limit: 25,
       });
@@ -107,6 +200,23 @@ function App() {
     }
   }
 
+  function selectCalendarDate(date: string) {
+    setDateFrom(date);
+    setDateTo(date);
+    setCalendarMonth(date.slice(0, 7));
+    runSearch(undefined, { dateFrom: date, dateTo: date }).catch((err) =>
+      setError(err instanceof Error ? err.message : "Search failed"),
+    );
+  }
+
+  function clearDateFilters() {
+    setDateFrom("");
+    setDateTo("");
+    runSearch(undefined, { dateFrom: "", dateTo: "" }).catch((err) =>
+      setError(err instanceof Error ? err.message : "Search failed"),
+    );
+  }
+
   useEffect(() => {
     loadParsers().catch((err) => setError(err instanceof Error ? err.message : "Failed to load parsers"));
   }, []);
@@ -118,6 +228,19 @@ function App() {
   }, [parsers.length, parserValue]);
 
   useEffect(() => {
+    if (parsers.length) {
+      loadCalendar().catch((err) => setError(err instanceof Error ? err.message : "Failed to load calendar"));
+    }
+  }, [calendarMonth, code, parsers.length, parserValue]);
+
+  useEffect(() => {
+    const activeDate = dateFrom || dateTo;
+    if (activeDate.length >= 7) {
+      setCalendarMonth(activeDate.slice(0, 7));
+    }
+  }, [dateFrom, dateTo]);
+
+  useEffect(() => {
     if (selectedId === null) {
       setDetail(null);
       return;
@@ -125,7 +248,10 @@ function App() {
     setDetailLoading(true);
     setPageIndex(0);
     fetchParseJob(selectedId)
-      .then((value) => setDetail(value))
+      .then((value) => {
+        setError(null);
+        setDetail(value);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load parse job"))
       .finally(() => setDetailLoading(false));
   }, [selectedId]);
@@ -188,6 +314,85 @@ function App() {
 
       <main className="workspace">
         <aside className="results-pane">
+          <section className="calendar-panel" aria-label="Report calendar">
+            <div className="calendar-header">
+              <button
+                className="square-button"
+                type="button"
+                title="Previous month"
+                onClick={() => setCalendarMonth((value) => addMonths(value, -1))}
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <div className="calendar-title">
+                <CalendarDays size={16} />
+                <strong>{formatMonth(calendarMonth)}</strong>
+                <span>
+                  {calendarLoading
+                    ? "Loading"
+                    : `${formatNumber(calendarRecordTotal)} records${
+                        calendarReportTotal !== calendarRecordTotal
+                          ? ` · ${formatNumber(calendarReportTotal)} parsed matches`
+                          : ""
+                      }`}
+                </span>
+              </div>
+              <button
+                className="square-button"
+                type="button"
+                title="Next month"
+                onClick={() => setCalendarMonth((value) => addMonths(value, 1))}
+              >
+                <ChevronRight size={18} />
+              </button>
+              <button
+                className="square-button"
+                type="button"
+                title="Clear date filter"
+                disabled={!dateFrom && !dateTo}
+                onClick={clearDateFilters}
+              >
+                <X size={17} />
+              </button>
+            </div>
+            <div className="calendar-weekdays">
+              {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
+                <span key={day}>{day}</span>
+              ))}
+            </div>
+            <div className="calendar-grid">
+              {calendarCells.map((cell) => {
+                const recordCount = calendarRecordCounts.get(cell.date) ?? 0;
+                const reportCount = calendarReportCounts.get(cell.date) ?? 0;
+                const isSelected = selectedDate === cell.date;
+                const isInRange = !selectedDate && dateFrom && dateTo && cell.date >= dateFrom && cell.date <= dateTo;
+                return (
+                  <button
+                    key={cell.date}
+                    className={[
+                      "calendar-day",
+                      cell.isCurrentMonth ? "" : "outside",
+                      cell.isWeekend ? "weekend" : "",
+                      recordCount > 0 ? "has-reports" : "",
+                      reportCount > 0 ? "has-matches" : "",
+                      isSelected ? "selected" : "",
+                      isInRange ? "in-range" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    type="button"
+                    title={`${cell.date}: ${formatNumber(recordCount)} records${
+                      reportCount !== recordCount ? `, ${formatNumber(reportCount)} parsed matches` : ""
+                    }`}
+                    onClick={() => selectCalendarDate(cell.date)}
+                  >
+                    <span className="calendar-day-number">{cell.day}</span>
+                    {recordCount > 0 ? <span className="calendar-count">{formatNumber(recordCount)}</span> : null}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
           <div className="pane-header">
             <div>
               <strong>{loading ? "Loading..." : `${formatNumber(total)} matches`}</strong>

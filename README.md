@@ -99,6 +99,20 @@ tdnet download --limit 100
 tdnet parse --limit 100 --workers 16
 ```
 
+Run the default end-to-end pipeline for the last 30 days:
+
+```bash
+scripts/tdnet_all_in_one.sh
+```
+
+Useful variants:
+
+```bash
+scripts/tdnet_all_in_one.sh --days 7 --parse-workers 16
+scripts/tdnet_all_in_one.sh --start-date 2026-05-01 --end-date 2026-05-15 --retry-failed
+scripts/tdnet_all_in_one.sh --with-ocr --with-review
+```
+
 The legacy form remains supported:
 
 ```bash

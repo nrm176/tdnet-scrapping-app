@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.schemas import (
@@ -12,6 +12,7 @@ from app.backend.schemas import (
     ParseJobDetailResponse,
     ParseSearchResult,
     ParseSearchResponse,
+    ReportCalendarDay,
 )
 from tdnet.orm import (
     DisclosureFileRecord,
@@ -204,6 +205,65 @@ async def search_parse_texts(
             for parse_job, parse_text, file_record, disclosure in rows
         ],
     )
+
+
+async def list_report_calendar_days(
+    session: AsyncSession,
+    *,
+    month_start: date,
+    month_end: date,
+    query: str | None = None,
+    parser_name: str | None = None,
+    parser_version: str | None = None,
+    code: str | None = None,
+) -> list[ReportCalendarDay]:
+    record_stmt = (
+        select(
+            DisclosureRecord.disclosure_date,
+            func.count(DisclosureRecord.id),
+        )
+        .where(DisclosureRecord.disclosure_date >= month_start)
+        .where(DisclosureRecord.disclosure_date <= month_end)
+        .group_by(DisclosureRecord.disclosure_date)
+    )
+    if code:
+        record_stmt = record_stmt.where(DisclosureRecord.code == code.strip().upper())
+
+    record_counts = {
+        disclosure_date: int(record_count or 0)
+        for disclosure_date, record_count in (await session.execute(record_stmt)).all()
+    }
+
+    normalized_query = query.strip() if query and query.strip() else None
+    filtered = _apply_filters(
+        _base_join(),
+        query=normalized_query,
+        parser_name=parser_name,
+        parser_version=parser_version,
+        code=code,
+        date_from=month_start,
+        date_to=month_end,
+    )
+    stmt = (
+        filtered.with_only_columns(
+            DisclosureRecord.disclosure_date,
+            func.count(distinct(DisclosureFileRecord.id)),
+        )
+        .group_by(DisclosureRecord.disclosure_date)
+        .order_by(DisclosureRecord.disclosure_date.asc())
+    )
+    report_counts = {
+        disclosure_date: int(report_count or 0)
+        for disclosure_date, report_count in (await session.execute(stmt)).all()
+    }
+    return [
+        ReportCalendarDay(
+            disclosure_date=disclosure_date,
+            record_count=record_counts.get(disclosure_date, 0),
+            report_count=report_counts.get(disclosure_date, 0),
+        )
+        for disclosure_date in sorted(record_counts.keys() | report_counts.keys())
+    ]
 
 
 async def get_parse_job_detail(

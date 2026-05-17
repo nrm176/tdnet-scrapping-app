@@ -1,4 +1,4 @@
-import type { ParseJobDetail, ParseSearchResponse, ParserOption } from "./types";
+import type { ParseJobDetail, ParseSearchResponse, ParserOption, ReportCalendarResponse } from "./types";
 
 type SearchParams = {
   q?: string;
@@ -11,11 +11,28 @@ type SearchParams = {
   offset?: number;
 };
 
+type CalendarParams = {
+  month: string;
+  q?: string;
+  parserName?: string;
+  parserVersion?: string;
+  code?: string;
+};
+
 async function requestJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Request failed with ${response.status}`);
+    let message = text || response.statusText;
+    try {
+      const body = JSON.parse(text) as { detail?: unknown };
+      if (typeof body.detail === "string") {
+        message = body.detail;
+      }
+    } catch {
+      // Keep the raw response body when the server did not return JSON.
+    }
+    throw new Error(`${url} failed with ${response.status}: ${message}`);
   }
   return response.json() as Promise<T>;
 }
@@ -52,6 +69,16 @@ export async function fetchReviewQueue(params: SearchParams): Promise<ParseSearc
   appendOptional(query, "limit", params.limit ?? 25);
   appendOptional(query, "offset", params.offset ?? 0);
   return requestJson<ParseSearchResponse>(`/api/review-queue?${query.toString()}`);
+}
+
+export async function fetchReportCalendar(params: CalendarParams): Promise<ReportCalendarResponse> {
+  const query = new URLSearchParams();
+  appendOptional(query, "month", params.month);
+  appendOptional(query, "q", params.q?.trim());
+  appendOptional(query, "parser_name", params.parserName);
+  appendOptional(query, "parser_version", params.parserVersion);
+  appendOptional(query, "code", params.code?.trim());
+  return requestJson<ReportCalendarResponse>(`/api/calendar?${query.toString()}`);
 }
 
 export async function fetchParseJob(parseJobId: number): Promise<ParseJobDetail> {

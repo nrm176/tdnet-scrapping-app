@@ -245,6 +245,23 @@ async def complete_disclosure_file(
     await session.commit()
 
 
+async def mark_disclosure_file_present(
+    session: AsyncSession,
+    record: DisclosureFileRecord,
+    *,
+    file_size_bytes: int,
+    sha256: str,
+    content_type: str | None,
+) -> None:
+    record.download_status = "completed"
+    record.file_size_bytes = file_size_bytes
+    record.sha256 = sha256
+    record.content_type = content_type
+    record.downloaded_at = datetime.now(timezone.utc)
+    record.last_download_error = None
+    await session.commit()
+
+
 async def complete_disclosure_file_by_id(
     session: AsyncSession,
     file_id: int,

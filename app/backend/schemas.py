@@ -22,6 +22,17 @@ class ParserOptionsResponse(BaseModel):
     parsers: list[ParserOption]
 
 
+class ReportCalendarDay(BaseModel):
+    disclosure_date: date
+    record_count: int = Field(ge=0)
+    report_count: int = Field(ge=0)
+
+
+class ReportCalendarResponse(BaseModel):
+    month: str
+    days: list[ReportCalendarDay]
+
+
 class ParseSearchResult(BaseModel):
     parse_job_id: int
     file_id: int

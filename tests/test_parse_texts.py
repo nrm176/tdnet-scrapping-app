@@ -15,6 +15,8 @@ from tdnet.parse_texts import (
     backfill_parse_texts,
     load_parse_text_payload,
     persist_parse_text_artifacts,
+    sanitize_postgres_json,
+    sanitize_postgres_text,
 )
 from tdnet.repository import (
     complete_disclosure_file,
@@ -106,6 +108,27 @@ def test_load_parse_text_payload_reads_markdown_and_pages(tmp_path):
     assert payload.page_count == 1
     assert payload.char_count == 6
     assert payload.content_sha256 == hashlib.sha256(b"hello\n").hexdigest()
+
+
+def test_load_parse_text_payload_strips_postgres_nul_characters(tmp_path):
+    markdown_path = tmp_path / "pymupdf4llm.test.md"
+    markdown_path.write_text("hello\x00 world\n", encoding="utf-8")
+    markdown_path.with_suffix(".pages.json").write_text(
+        json.dumps({"pages": [{"page": 1, "markdown": "hello\x00 world\n"}]}),
+        encoding="utf-8",
+    )
+
+    payload = load_parse_text_payload(markdown_path)
+
+    assert payload.content_text == "hello world\n"
+    assert payload.pages_json == {"pages": [{"page": 1, "markdown": "hello world\n"}]}
+    assert payload.char_count == len("hello world\n")
+    assert payload.content_sha256 == hashlib.sha256("hello world\n".encode("utf-8")).hexdigest()
+
+
+def test_sanitize_postgres_json_recurses_through_keys_and_values():
+    assert sanitize_postgres_text("a\x00b") == "ab"
+    assert sanitize_postgres_json({"a\x00": ["b\x00", {"c": "d\x00"}]}) == {"a": ["b", {"c": "d"}]}
 
 
 @pytest.mark.asyncio

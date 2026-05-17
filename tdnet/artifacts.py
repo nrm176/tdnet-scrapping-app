@@ -23,6 +23,7 @@ from .repository import (
     fail_disclosure_file_by_id,
     get_or_create_disclosure_file,
     iter_disclosures_for_download,
+    mark_disclosure_file_present,
 )
 
 DEFAULT_BUCKET = "tdnet"
@@ -110,6 +111,19 @@ async def _write_bytes(destination: Path, data: bytes) -> None:
         temp_destination.replace(destination)
 
     await asyncio.to_thread(write)
+
+
+async def _read_local_file_metadata(path: Path) -> tuple[int, str]:
+    def read() -> tuple[int, str]:
+        digest = hashlib.sha256()
+        total_size = 0
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                total_size += len(chunk)
+                digest.update(chunk)
+        return total_size, digest.hexdigest()
+
+    return await asyncio.to_thread(read)
 
 
 async def _download_file(
@@ -227,11 +241,30 @@ async def download_pending_files(
                 storage_path=str(storage_path),
             )
 
-            if (
-                file_record.download_status == "completed"
-                and storage_path.exists()
-                and not retry_failed
-            ):
+            if storage_path.is_file():
+                size, sha256 = await _read_local_file_metadata(storage_path)
+                if size > 0:
+                    await mark_disclosure_file_present(
+                        session,
+                        file_record,
+                        file_size_bytes=size,
+                        sha256=sha256,
+                        content_type=file_record.content_type,
+                    )
+                    logger.info(
+                        "Using existing local file file_id=%s bytes=%s path=%s",
+                        file_record.id,
+                        size,
+                        storage_path,
+                    )
+                    skipped += 1
+                    continue
+                logger.warning(
+                    "Existing local file is empty; scheduling download file_id=%s path=%s",
+                    file_record.id,
+                    storage_path,
+                )
+            if file_record.download_status == "completed" and not retry_failed:
                 logger.debug("Skipping completed file_id=%s path=%s", file_record.id, storage_path)
                 skipped += 1
                 continue
@@ -250,10 +283,12 @@ async def download_pending_files(
 
     timeout = httpx.Timeout(60.0, connect=20.0)
     semaphore = asyncio.Semaphore(max(1, concurrency))
-    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=timeout) as client:
-        results: list[DownloadResult] = await asyncio.gather(
-            *(_run_download_task(task, client, semaphore) for task in tasks)
-        )
+    results: list[DownloadResult] = []
+    if tasks:
+        async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=timeout) as client:
+            results = await asyncio.gather(
+                *(_run_download_task(task, client, semaphore) for task in tasks)
+            )
 
     elapsed = time.perf_counter() - job_start
     downloaded_results = [result for result in results if result.status == "downloaded"]

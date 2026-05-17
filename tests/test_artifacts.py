@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tdnet.artifacts import (
     FORECAST_CORRECTION_BUCKET,
     build_storage_path,
+    download_pending_files,
     is_forecast_correction,
 )
 from tdnet.models import TdnetDisclosure
@@ -146,5 +148,90 @@ async def test_failed_downloads_are_only_selected_for_retry():
         assert await iter_disclosures_for_download(session) == []
         retry_candidates = await iter_disclosures_for_download(session, retry_failed=True)
         assert [candidate.id for candidate in retry_candidates] == [disclosure.id]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("initial_status", "retry_failed", "expected_attempts"),
+    [
+        ("pending", False, 0),
+        ("failed", True, 1),
+    ],
+)
+async def test_existing_local_file_is_reconciled_without_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    initial_status: str,
+    retry_failed: bool,
+    expected_attempts: int,
+):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    disclosure = TdnetDisclosure(
+        time="15:30",
+        code="12345",
+        name="テスト株式会社",
+        title="通常のお知らせ",
+        pdf_url="https://www.release.tdnet.info/inbs/140120251021001001.pdf",
+        xbrl_available=False,
+        place="東",
+        history="",
+        disclosure_date=date(2025, 10, 21),
+    )
+    payload = b"%PDF-1.7 already on disk\n"
+
+    async def fail_if_download_scheduled(*_args, **_kwargs):
+        raise AssertionError("download was scheduled for an existing local file")
+
+    monkeypatch.setattr("tdnet.artifacts._run_download_task", fail_if_download_scheduled)
+
+    async with session_factory() as session:
+        await upsert_disclosures(session, [disclosure])
+        record = await session.get(DisclosureRecord, disclosure.id)
+        assert record is not None
+
+        bucket, storage_path = build_storage_path(
+            tmp_path,
+            record,
+            file_type="pdf",
+            source_url=str(disclosure.pdf_url),
+        )
+        file_record = await get_or_create_disclosure_file(
+            session,
+            disclosure=record,
+            file_type="pdf",
+            source_url=str(disclosure.pdf_url),
+            source_file_id="140120251021001001",
+            storage_bucket=bucket,
+            storage_path=str(storage_path),
+        )
+        if initial_status == "failed":
+            await fail_disclosure_file(session, file_record, "previous failure")
+
+        storage_path.parent.mkdir(parents=True)
+        storage_path.write_bytes(payload)
+
+        summary = await download_pending_files(
+            session,
+            root=tmp_path,
+            limit=10,
+            retry_failed=retry_failed,
+            concurrency=2,
+        )
+
+        files = await query_disclosure_files(session, disclosure_id=disclosure.id)
+        assert summary.downloaded == 0
+        assert summary.failed == 0
+        assert summary.skipped == 1
+        assert files[0].download_status == "completed"
+        assert files[0].file_size_bytes == len(payload)
+        assert files[0].sha256 == hashlib.sha256(payload).hexdigest()
+        assert files[0].download_attempts == expected_attempts
+        assert files[0].last_download_error is None
 
     await engine.dispose()

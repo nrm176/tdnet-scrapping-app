@@ -1,7 +1,7 @@
 """Search and review API endpoints."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,10 +12,12 @@ from app.backend.schemas import (
     ParserOptionsResponse,
     ParseJobDetailResponse,
     ParseSearchResponse,
+    ReportCalendarResponse,
 )
 from app.backend.services.review_service import render_parse_job_page
 from app.backend.services.search_service import (
     get_parse_job_detail,
+    list_report_calendar_days,
     list_parser_options,
     search_parse_texts,
 )
@@ -24,9 +26,51 @@ from tdnet.database import get_session
 router = APIRouter(prefix="/api", tags=["review"])
 
 
+def _month_bounds(month: str) -> tuple[date, date]:
+    try:
+        year_text, month_text = month.split("-", 1)
+        year = int(year_text)
+        month_index = int(month_text)
+        if month_index < 1 or month_index > 12:
+            raise ValueError
+        month_start = date(year, month_index, 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Month must use YYYY-MM format") from exc
+
+    if month_index == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month_index + 1, 1)
+    return month_start, next_month - timedelta(days=1)
+
+
 @router.get("/parsers", response_model=ParserOptionsResponse)
 async def parsers(session: Annotated[AsyncSession, Depends(get_session)]) -> ParserOptionsResponse:
     return ParserOptionsResponse(parsers=await list_parser_options(session))
+
+
+@router.get("/calendar", response_model=ReportCalendarResponse)
+async def report_calendar(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    month: Annotated[str, Query(pattern=r"^\d{4}-\d{2}$")],
+    q: str | None = Query(default=None, max_length=500),
+    parser_name: str | None = None,
+    parser_version: str | None = None,
+    code: str | None = None,
+) -> ReportCalendarResponse:
+    month_start, month_end = _month_bounds(month)
+    return ReportCalendarResponse(
+        month=month,
+        days=await list_report_calendar_days(
+            session,
+            month_start=month_start,
+            month_end=month_end,
+            query=q,
+            parser_name=parser_name,
+            parser_version=parser_version,
+            code=code,
+        ),
+    )
 
 
 @router.get("/search", response_model=ParseSearchResponse)

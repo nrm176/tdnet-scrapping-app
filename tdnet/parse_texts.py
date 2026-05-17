@@ -47,18 +47,36 @@ def pages_path_for_markdown(markdown_path: Path) -> Path:
     return markdown_path.with_name(markdown_path.name.replace(".md", ".pages.json"))
 
 
+def sanitize_postgres_text(value: str) -> str:
+    """Remove characters PostgreSQL text/JSONB cannot store."""
+    return value.replace("\x00", "")
+
+
+def sanitize_postgres_json(value: Any) -> Any:
+    if isinstance(value, str):
+        return sanitize_postgres_text(value)
+    if isinstance(value, list):
+        return [sanitize_postgres_json(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            sanitize_postgres_text(str(key)): sanitize_postgres_json(item)
+            for key, item in value.items()
+        }
+    return value
+
+
 def load_parse_text_payload(markdown_path: Path, pages_path: Path | None = None) -> ParseTextPayload:
     if not markdown_path.exists():
         raise FileNotFoundError(f"Parsed markdown does not exist: {markdown_path}")
 
-    content_text = markdown_path.read_text(encoding="utf-8")
+    content_text = sanitize_postgres_text(markdown_path.read_text(encoding="utf-8"))
     resolved_pages_path = pages_path or pages_path_for_markdown(markdown_path)
     pages_json: dict[str, Any] | None = None
     page_count = 0
     if resolved_pages_path.exists():
         raw_pages = json.loads(resolved_pages_path.read_text(encoding="utf-8"))
         if isinstance(raw_pages, dict):
-            pages_json = raw_pages
+            pages_json = sanitize_postgres_json(raw_pages)
             raw_page_list = raw_pages.get("pages")
             if isinstance(raw_page_list, list):
                 page_count = len(raw_page_list)
@@ -196,6 +214,7 @@ async def backfill_parse_texts(
                 text_path=parse_job.text_path,
             )
         except Exception as exc:
+            await session.rollback()
             failed += 1
             stats.record_failure(
                 item_id=parse_job.id,
