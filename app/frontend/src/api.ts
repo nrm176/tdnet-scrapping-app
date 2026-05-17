@@ -1,4 +1,4 @@
-import type { ParseJobDetail, ParseSearchResponse, ParserOption, ReportCalendarResponse } from "./types";
+import type { ParseJobDetail, ParseSearchResponse, ParserOption, ReportCalendarResponse, ReportTag } from "./types";
 
 type SearchParams = {
   q?: string;
@@ -7,6 +7,8 @@ type SearchParams = {
   code?: string;
   dateFrom?: string;
   dateTo?: string;
+  tags?: string[];
+  tagMode?: "any" | "all";
   limit?: number;
   offset?: number;
 };
@@ -17,6 +19,8 @@ type CalendarParams = {
   parserName?: string;
   parserVersion?: string;
   code?: string;
+  tags?: string[];
+  tagMode?: "any" | "all";
 };
 
 async function requestJson<T>(url: string): Promise<T> {
@@ -44,9 +48,22 @@ function appendOptional(params: URLSearchParams, key: string, value: string | nu
   params.set(key, String(value));
 }
 
+function appendOptionalList(params: URLSearchParams, key: string, values: string[] | undefined): void {
+  values?.forEach((value) => {
+    if (value) {
+      params.append(key, value);
+    }
+  });
+}
+
 export async function fetchParsers(): Promise<ParserOption[]> {
   const response = await requestJson<{ parsers: ParserOption[] }>("/api/parsers");
   return response.parsers;
+}
+
+export async function fetchTags(): Promise<ReportTag[]> {
+  const response = await requestJson<{ tags: ReportTag[] }>("/api/tags");
+  return response.tags;
 }
 
 export async function searchParseTexts(params: SearchParams): Promise<ParseSearchResponse> {
@@ -57,6 +74,8 @@ export async function searchParseTexts(params: SearchParams): Promise<ParseSearc
   appendOptional(query, "code", params.code?.trim());
   appendOptional(query, "date_from", params.dateFrom);
   appendOptional(query, "date_to", params.dateTo);
+  appendOptionalList(query, "tags", params.tags);
+  appendOptional(query, "tag_mode", params.tagMode);
   appendOptional(query, "limit", params.limit ?? 25);
   appendOptional(query, "offset", params.offset ?? 0);
   return requestJson<ParseSearchResponse>(`/api/search?${query.toString()}`);
@@ -66,6 +85,8 @@ export async function fetchReviewQueue(params: SearchParams): Promise<ParseSearc
   const query = new URLSearchParams();
   appendOptional(query, "parser_name", params.parserName);
   appendOptional(query, "parser_version", params.parserVersion);
+  appendOptionalList(query, "tags", params.tags);
+  appendOptional(query, "tag_mode", params.tagMode);
   appendOptional(query, "limit", params.limit ?? 25);
   appendOptional(query, "offset", params.offset ?? 0);
   return requestJson<ParseSearchResponse>(`/api/review-queue?${query.toString()}`);
@@ -78,6 +99,8 @@ export async function fetchReportCalendar(params: CalendarParams): Promise<Repor
   appendOptional(query, "parser_name", params.parserName);
   appendOptional(query, "parser_version", params.parserVersion);
   appendOptional(query, "code", params.code?.trim());
+  appendOptionalList(query, "tags", params.tags);
+  appendOptional(query, "tag_mode", params.tagMode);
   return requestJson<ReportCalendarResponse>(`/api/calendar?${query.toString()}`);
 }
 

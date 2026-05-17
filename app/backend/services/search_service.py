@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal, Sequence
 
 from sqlalchemy import Select, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,15 @@ from app.backend.schemas import (
     ParseJobDetailResponse,
     ParseSearchResult,
     ParseSearchResponse,
+    ReportTagAssignmentResponse,
     ReportCalendarDay,
+    ReportTagResponse,
+)
+from tdnet.tagging import (
+    list_report_tag_summaries,
+    list_tag_assignments_for_disclosures,
+    normalize_tag_slugs,
+    tag_assignment_exists,
 )
 from tdnet.orm import (
     DisclosureFileRecord,
@@ -20,6 +29,8 @@ from tdnet.orm import (
     DocumentParseJobRecord,
     DocumentParseTextRecord,
 )
+
+TagMode = Literal["any", "all"]
 
 
 def _escape_like(value: str) -> str:
@@ -85,6 +96,8 @@ def _apply_filters(
     code: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    tags: Sequence[str] | None = None,
+    tag_mode: TagMode = "any",
 ) -> Select:
     if parser_name:
         stmt = stmt.where(DocumentParseJobRecord.parser_name == parser_name)
@@ -96,6 +109,7 @@ def _apply_filters(
         stmt = stmt.where(DisclosureRecord.disclosure_date >= date_from)
     if date_to:
         stmt = stmt.where(DisclosureRecord.disclosure_date <= date_to)
+    stmt = _apply_disclosure_tag_filters(stmt, tags=tags, tag_mode=tag_mode)
     if query:
         pattern = f"%{_escape_like(query.strip())}%"
         stmt = stmt.where(
@@ -109,6 +123,34 @@ def _apply_filters(
     return stmt
 
 
+def _apply_disclosure_tag_filters(
+    stmt: Select,
+    *,
+    tags: Sequence[str] | None = None,
+    tag_mode: TagMode = "any",
+) -> Select:
+    clauses = tag_assignment_exists(DisclosureRecord.id, normalize_tag_slugs(tags), tag_mode)
+    if not clauses:
+        return stmt
+    for clause in clauses:
+        stmt = stmt.where(clause)
+    return stmt
+
+
+def _tag_views_to_response(tags: list) -> list[ReportTagAssignmentResponse]:
+    return [
+        ReportTagAssignmentResponse(
+            slug=tag.slug,
+            label_ja=tag.label_ja,
+            label_en=tag.label_en,
+            is_primary=tag.is_primary,
+            confidence=tag.confidence,
+            source=tag.source,
+        )
+        for tag in tags
+    ]
+
+
 def _row_to_result(
     parse_job: DocumentParseJobRecord,
     parse_text: DocumentParseTextRecord,
@@ -116,6 +158,7 @@ def _row_to_result(
     disclosure: DisclosureRecord,
     *,
     query: str | None,
+    tags: list[ReportTagAssignmentResponse] | None = None,
 ) -> ParseSearchResult:
     return ParseSearchResult(
         parse_job_id=parse_job.id,
@@ -132,7 +175,25 @@ def _row_to_result(
         char_count=parse_text.char_count,
         parsed_at=parse_job.parsed_at,
         snippet=_make_snippet(parse_text.content_text, query),
+        tags=tags or [],
     )
+
+
+async def list_report_tags(session: AsyncSession) -> list[ReportTagResponse]:
+    summaries = await list_report_tag_summaries(session)
+    return [
+        ReportTagResponse(
+            slug=summary.slug,
+            label_ja=summary.label_ja,
+            label_en=summary.label_en,
+            description=summary.description,
+            priority=summary.priority,
+            active=summary.active,
+            assignment_count=summary.assignment_count,
+            primary_count=summary.primary_count,
+        )
+        for summary in summaries
+    ]
 
 
 async def list_parser_options(session: AsyncSession) -> list[ParserOption]:
@@ -169,6 +230,8 @@ async def search_parse_texts(
     code: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    tags: Sequence[str] | None = None,
+    tag_mode: TagMode = "any",
     limit: int = 25,
     offset: int = 0,
 ) -> ParseSearchResponse:
@@ -181,6 +244,8 @@ async def search_parse_texts(
         code=code,
         date_from=date_from,
         date_to=date_to,
+        tags=tags,
+        tag_mode=tag_mode,
     )
     count_stmt = filtered.with_only_columns(func.count()).order_by(None)
     total = int(await session.scalar(count_stmt) or 0)
@@ -195,13 +260,22 @@ async def search_parse_texts(
             .offset(offset)
         )
     ).all()
+    disclosure_ids = [disclosure.id for _, _, _, disclosure in rows]
+    tag_map = await list_tag_assignments_for_disclosures(session, disclosure_ids)
     return ParseSearchResponse(
         query=normalized_query,
         total=total,
         limit=limit,
         offset=offset,
         results=[
-            _row_to_result(parse_job, parse_text, file_record, disclosure, query=normalized_query)
+            _row_to_result(
+                parse_job,
+                parse_text,
+                file_record,
+                disclosure,
+                query=normalized_query,
+                tags=_tag_views_to_response(tag_map.get(disclosure.id, [])),
+            )
             for parse_job, parse_text, file_record, disclosure in rows
         ],
     )
@@ -216,6 +290,8 @@ async def list_report_calendar_days(
     parser_name: str | None = None,
     parser_version: str | None = None,
     code: str | None = None,
+    tags: Sequence[str] | None = None,
+    tag_mode: TagMode = "any",
 ) -> list[ReportCalendarDay]:
     record_stmt = (
         select(
@@ -228,6 +304,7 @@ async def list_report_calendar_days(
     )
     if code:
         record_stmt = record_stmt.where(DisclosureRecord.code == code.strip().upper())
+    record_stmt = _apply_disclosure_tag_filters(record_stmt, tags=tags, tag_mode=tag_mode)
 
     record_counts = {
         disclosure_date: int(record_count or 0)
@@ -243,6 +320,8 @@ async def list_report_calendar_days(
         code=code,
         date_from=month_start,
         date_to=month_end,
+        tags=tags,
+        tag_mode=tag_mode,
     )
     stmt = (
         filtered.with_only_columns(
@@ -275,7 +354,15 @@ async def get_parse_job_detail(
     if row is None:
         return None
     parse_job, parse_text, file_record, disclosure = row
-    base = _row_to_result(parse_job, parse_text, file_record, disclosure, query=None)
+    tag_map = await list_tag_assignments_for_disclosures(session, [disclosure.id])
+    base = _row_to_result(
+        parse_job,
+        parse_text,
+        file_record,
+        disclosure,
+        query=None,
+        tags=_tag_views_to_response(tag_map.get(disclosure.id, [])),
+    )
     return ParseJobDetailResponse(
         **base.model_dump(),
         source_url=file_record.source_url,

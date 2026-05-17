@@ -33,6 +33,30 @@ class ReportCalendarResponse(BaseModel):
     days: list[ReportCalendarDay]
 
 
+class ReportTagResponse(BaseModel):
+    slug: str
+    label_ja: str
+    label_en: str
+    description: str
+    priority: int
+    active: bool
+    assignment_count: int = Field(ge=0)
+    primary_count: int = Field(ge=0)
+
+
+class ReportTagsResponse(BaseModel):
+    tags: list[ReportTagResponse]
+
+
+class ReportTagAssignmentResponse(BaseModel):
+    slug: str
+    label_ja: str
+    label_en: str
+    is_primary: bool
+    confidence: float = Field(ge=0, le=1)
+    source: str
+
+
 class ParseSearchResult(BaseModel):
     parse_job_id: int
     file_id: int
@@ -48,6 +72,7 @@ class ParseSearchResult(BaseModel):
     char_count: int
     parsed_at: datetime | None
     snippet: str
+    tags: list[ReportTagAssignmentResponse] = Field(default_factory=list)
 
 
 class ParseSearchResponse(BaseModel):

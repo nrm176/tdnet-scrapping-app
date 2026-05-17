@@ -15,10 +15,11 @@ import {
   fetchParsers,
   fetchReportCalendar,
   fetchReviewQueue,
+  fetchTags,
   pageImageUrl,
   searchParseTexts,
 } from "./api";
-import type { ParseJobDetail, ParseSearchResult, ParserOption, ReportCalendarDay } from "./types";
+import type { ParseJobDetail, ParseSearchResult, ParserOption, ReportCalendarDay, ReportTag } from "./types";
 
 type ParserSelection = {
   parserName?: string;
@@ -92,11 +93,14 @@ function buildCalendarCells(monthKey: string): CalendarCell[] {
 
 function App() {
   const [parsers, setParsers] = useState<ParserOption[]>([]);
+  const [tags, setTags] = useState<ReportTag[]>([]);
   const [parserValue, setParserValue] = useState("");
   const [query, setQuery] = useState("");
   const [code, setCode] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagMode, setTagMode] = useState<"any" | "all">("any");
   const [calendarMonth, setCalendarMonth] = useState(currentMonthKey());
   const [calendarDays, setCalendarDays] = useState<ReportCalendarDay[]>([]);
   const [results, setResults] = useState<ParseSearchResult[]>([]);
@@ -140,12 +144,20 @@ function App() {
     }
   }
 
+  async function loadTags() {
+    const options = await fetchTags();
+    setError(null);
+    setTags(options.filter((option) => option.active));
+  }
+
   async function loadRecent() {
     setLoading(true);
     setError(null);
     try {
       const response = await fetchReviewQueue({
         ...parserSelection,
+        tags: selectedTags,
+        tagMode,
         limit: 25,
       });
       setResults(response.results);
@@ -164,6 +176,8 @@ function App() {
       const response = await fetchReportCalendar({
         month: calendarMonth,
         code,
+        tags: selectedTags,
+        tagMode,
         ...parserSelection,
       });
       setError(null);
@@ -187,6 +201,8 @@ function App() {
         code,
         dateFrom: nextDateFrom,
         dateTo: nextDateTo,
+        tags: selectedTags,
+        tagMode,
         ...parserSelection,
         limit: 25,
       });
@@ -219,6 +235,7 @@ function App() {
 
   useEffect(() => {
     loadParsers().catch((err) => setError(err instanceof Error ? err.message : "Failed to load parsers"));
+    loadTags().catch((err) => setError(err instanceof Error ? err.message : "Failed to load tags"));
   }, []);
 
   useEffect(() => {
@@ -231,7 +248,7 @@ function App() {
     if (parsers.length) {
       loadCalendar().catch((err) => setError(err instanceof Error ? err.message : "Failed to load calendar"));
     }
-  }, [calendarMonth, code, parsers.length, parserValue]);
+  }, [calendarMonth, code, parsers.length, parserValue, selectedTags, tagMode]);
 
   useEffect(() => {
     const activeDate = dateFrom || dateTo;
@@ -292,6 +309,29 @@ function App() {
         <label className="field field-code">
           <span>Code</span>
           <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="85600" />
+        </label>
+        <label className="field field-tags">
+          <span>Tags</span>
+          <select
+            multiple
+            value={selectedTags}
+            onChange={(event) =>
+              setSelectedTags(Array.from(event.currentTarget.selectedOptions, (option) => option.value))
+            }
+          >
+            {tags.map((tag) => (
+              <option key={tag.slug} value={tag.slug}>
+                {tag.label_ja} · {formatNumber(tag.assignment_count)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field field-mode">
+          <span>Mode</span>
+          <select value={tagMode} onChange={(event) => setTagMode(event.target.value as "any" | "all")}>
+            <option value="any">Any</option>
+            <option value="all">All</option>
+          </select>
         </label>
         <label className="field field-date">
           <span>From</span>
@@ -413,6 +453,19 @@ function App() {
                 </div>
                 <div className="result-title">{result.title}</div>
                 <div className="company">{result.company_name}</div>
+                {result.tags.length ? (
+                  <div className="tag-chip-list">
+                    {result.tags.map((tag) => (
+                      <span
+                        key={tag.slug}
+                        className={`tag-chip ${tag.is_primary ? "primary" : ""}`}
+                        title={`${tag.label_en} · ${tag.source}`}
+                      >
+                        {tag.label_ja}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="snippet">{result.snippet || "No snippet available."}</div>
                 <div className="result-meta">
                   <span>{result.parser_name}</span>
@@ -445,6 +498,19 @@ function App() {
                     <span>{detail.company_name}</span>
                     <span>{detail.parser_name}</span>
                   </div>
+                  {detail.tags.length ? (
+                    <div className="tag-chip-list document-tags">
+                      {detail.tags.map((tag) => (
+                        <span
+                          key={tag.slug}
+                          className={`tag-chip ${tag.is_primary ? "primary" : ""}`}
+                          title={`${tag.label_en} · ${tag.source}`}
+                        >
+                          {tag.label_ja}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <a className="icon-button link-button" href={detail.source_url} target="_blank" rel="noreferrer">
                   <ExternalLink size={17} />

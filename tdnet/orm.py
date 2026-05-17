@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -44,6 +44,10 @@ class DisclosureRecord(Base):
     )
 
     files: Mapped[list["DisclosureFileRecord"]] = relationship(
+        back_populates="disclosure",
+        cascade="all, delete-orphan",
+    )
+    tag_assignments: Mapped[list["ReportTagAssignmentRecord"]] = relationship(
         back_populates="disclosure",
         cascade="all, delete-orphan",
     )
@@ -95,6 +99,9 @@ class DisclosureFileRecord(Base):
         back_populates="file",
         cascade="all, delete-orphan",
     )
+    tag_assignments: Mapped[list["ReportTagAssignmentRecord"]] = relationship(
+        back_populates="file",
+    )
 
 
 class DocumentParseJobRecord(Base):
@@ -137,6 +144,9 @@ class DocumentParseJobRecord(Base):
     parse_text: Mapped["DocumentParseTextRecord | None"] = relationship(
         back_populates="parse_job",
         cascade="all, delete-orphan",
+    )
+    tag_assignments: Mapped[list["ReportTagAssignmentRecord"]] = relationship(
+        back_populates="parse_job",
     )
 
 
@@ -212,3 +222,86 @@ class DocumentAnalysisResultRecord(Base):
 
     file: Mapped[DisclosureFileRecord] = relationship(back_populates="analysis_results")
     parse_job: Mapped[DocumentParseJobRecord | None] = relationship(back_populates="analysis_results")
+
+
+class ReportTagRecord(Base):
+    __tablename__ = "tdnet_report_tags"
+    __table_args__ = (
+        Index("ix_tdnet_report_tags_active_priority", "active", "priority"),
+    )
+
+    slug: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label_ja: Mapped[str] = mapped_column(Text, nullable=False)
+    label_en: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    assignments: Mapped[list["ReportTagAssignmentRecord"]] = relationship(
+        back_populates="tag",
+        cascade="all, delete-orphan",
+    )
+
+
+class ReportTagAssignmentRecord(Base):
+    __tablename__ = "tdnet_report_tag_assignments"
+    __table_args__ = (
+        UniqueConstraint("disclosure_id", "tag_slug", name="uq_report_tag_assignments_disclosure_tag"),
+        Index("ix_report_tag_assignments_tag_slug", "tag_slug"),
+        Index("ix_report_tag_assignments_disclosure_primary", "disclosure_id", "is_primary"),
+        Index("ix_report_tag_assignments_tagger", "tagger_name", "tagger_version"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    disclosure_id: Mapped[str] = mapped_column(
+        ForeignKey("tdnet_disclosures.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tag_slug: Mapped[str] = mapped_column(
+        ForeignKey("tdnet_report_tags.slug", ondelete="CASCADE"),
+        nullable=False,
+    )
+    file_id: Mapped[int | None] = mapped_column(
+        ForeignKey("disclosure_files.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    parse_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("document_parse_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence_json: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+    tagger_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    tagger_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    disclosure: Mapped[DisclosureRecord] = relationship(back_populates="tag_assignments")
+    tag: Mapped[ReportTagRecord] = relationship(back_populates="assignments")
+    file: Mapped[DisclosureFileRecord | None] = relationship(back_populates="tag_assignments")
+    parse_job: Mapped[DocumentParseJobRecord | None] = relationship(back_populates="tag_assignments")

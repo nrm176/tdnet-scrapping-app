@@ -67,7 +67,9 @@ select {
 
 .search-band {
   display: grid;
-  grid-template-columns: minmax(280px, 1.5fr) minmax(220px, 1fr) 100px 150px 150px auto auto;
+  grid-template-columns:
+    minmax(190px, 1.3fr) minmax(170px, 0.9fr) 86px minmax(170px, 0.9fr)
+    82px 136px 136px auto auto;
   gap: 10px;
   align-items: end;
   padding: 12px 20px;
@@ -102,6 +104,11 @@ select {
 .field select:focus {
   border-color: #0f766e;
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
+.field-tags select {
+  height: 64px;
+  padding: 5px 8px;
 }
 
 .icon-button,
@@ -366,6 +373,37 @@ select {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.tag-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.tag-chip {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid #d1d8e2;
+  border-radius: 999px;
+  background: #f7f9fb;
+  color: #435166;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-chip.primary {
+  border-color: #9ac2bd;
+  background: #e9f7f4;
+  color: #0b615b;
+}
+
+.document-tags {
+  margin-top: 7px;
 }
 
 .date,

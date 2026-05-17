@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -13,11 +13,13 @@ from app.backend.schemas import (
     ParseJobDetailResponse,
     ParseSearchResponse,
     ReportCalendarResponse,
+    ReportTagsResponse,
 )
 from app.backend.services.review_service import render_parse_job_page
 from app.backend.services.search_service import (
     get_parse_job_detail,
     list_report_calendar_days,
+    list_report_tags,
     list_parser_options,
     search_parse_texts,
 )
@@ -44,9 +46,24 @@ def _month_bounds(month: str) -> tuple[date, date]:
     return month_start, next_month - timedelta(days=1)
 
 
+def _normalize_query_tags(tags: list[str] | None) -> list[str]:
+    values: list[str] = []
+    for raw_value in tags or []:
+        for part in raw_value.split(","):
+            value = part.strip().lower()
+            if value and value not in values:
+                values.append(value)
+    return values
+
+
 @router.get("/parsers", response_model=ParserOptionsResponse)
 async def parsers(session: Annotated[AsyncSession, Depends(get_session)]) -> ParserOptionsResponse:
     return ParserOptionsResponse(parsers=await list_parser_options(session))
+
+
+@router.get("/tags", response_model=ReportTagsResponse)
+async def tags(session: Annotated[AsyncSession, Depends(get_session)]) -> ReportTagsResponse:
+    return ReportTagsResponse(tags=await list_report_tags(session))
 
 
 @router.get("/calendar", response_model=ReportCalendarResponse)
@@ -57,6 +74,8 @@ async def report_calendar(
     parser_name: str | None = None,
     parser_version: str | None = None,
     code: str | None = None,
+    tags: Annotated[list[str] | None, Query()] = None,
+    tag_mode: Literal["any", "all"] = "any",
 ) -> ReportCalendarResponse:
     month_start, month_end = _month_bounds(month)
     return ReportCalendarResponse(
@@ -69,6 +88,8 @@ async def report_calendar(
             parser_name=parser_name,
             parser_version=parser_version,
             code=code,
+            tags=_normalize_query_tags(tags),
+            tag_mode=tag_mode,
         ),
     )
 
@@ -82,6 +103,8 @@ async def search(
     code: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    tags: Annotated[list[str] | None, Query()] = None,
+    tag_mode: Literal["any", "all"] = "any",
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ParseSearchResponse:
@@ -93,6 +116,8 @@ async def search(
         code=code,
         date_from=date_from,
         date_to=date_to,
+        tags=_normalize_query_tags(tags),
+        tag_mode=tag_mode,
         limit=limit,
         offset=offset,
     )
@@ -103,6 +128,8 @@ async def review_queue(
     session: Annotated[AsyncSession, Depends(get_session)],
     parser_name: str | None = None,
     parser_version: str | None = None,
+    tags: Annotated[list[str] | None, Query()] = None,
+    tag_mode: Literal["any", "all"] = "any",
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ParseSearchResponse:
@@ -110,6 +137,8 @@ async def review_queue(
         session,
         parser_name=parser_name,
         parser_version=parser_version,
+        tags=_normalize_query_tags(tags),
+        tag_mode=tag_mode,
         limit=limit,
         offset=offset,
     )

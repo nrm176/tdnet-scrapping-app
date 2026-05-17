@@ -6,10 +6,17 @@ from datetime import date
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.backend.services.search_service import get_parse_job_detail, list_parser_options, search_parse_texts
+from app.backend.services.search_service import (
+    get_parse_job_detail,
+    list_parser_options,
+    list_report_calendar_days,
+    list_report_tags,
+    search_parse_texts,
+)
 from tdnet.models import TdnetDisclosure
 from tdnet.orm import Base, DisclosureRecord, DocumentParseJobRecord
 from tdnet.repository import complete_disclosure_file, get_or_create_disclosure_file, upsert_disclosures, upsert_parse_text
+from tdnet.tagging import tag_reports
 
 
 @pytest.mark.asyncio
@@ -73,9 +80,33 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
             char_count=len(text),
             content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         )
+        await tag_reports(
+            session,
+            parser_name="apple-vision-ocr",
+            parser_version="ocr-version",
+            limit=10,
+        )
 
         options = await list_parser_options(session)
         response = await search_parse_texts(session, query="18,000", parser_name="apple-vision-ocr")
+        tagged_response = await search_parse_texts(
+            session,
+            parser_name="apple-vision-ocr",
+            tags=["forecast_revision"],
+        )
+        missing_tag_response = await search_parse_texts(
+            session,
+            parser_name="apple-vision-ocr",
+            tags=["share_buyback"],
+        )
+        calendar_days = await list_report_calendar_days(
+            session,
+            month_start=date(2026, 4, 1),
+            month_end=date(2026, 4, 30),
+            parser_name="apple-vision-ocr",
+            tags=["forecast_revision"],
+        )
+        tag_options = await list_report_tags(session)
         detail = await get_parse_job_detail(session, parse_job.id)
 
     assert options[0].parser_name == "apple-vision-ocr"
@@ -83,7 +114,14 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
     assert response.total == 1
     assert response.results[0].code == "85600"
     assert "18,000" in response.results[0].snippet
+    assert tagged_response.total == 1
+    assert tagged_response.results[0].tags[0].slug == "forecast_revision"
+    assert missing_tag_response.total == 0
+    assert calendar_days[0].record_count == 1
+    assert calendar_days[0].report_count == 1
+    assert any(tag.slug == "forecast_revision" and tag.assignment_count == 1 for tag in tag_options)
     assert detail is not None
+    assert detail.tags[0].slug == "forecast_revision"
     assert detail.pages[0].page == 1
     assert detail.content_text == text
     await engine.dispose()

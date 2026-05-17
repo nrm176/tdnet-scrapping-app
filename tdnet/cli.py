@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ from .repository import count_disclosures, query_disclosures, upsert_disclosures
 from .review import build_parse_review_report
 from .services import scrape_tdnet_by_date
 from .stats_logging import format_seconds
+from .tagging import list_report_tag_summaries, tag_reports
 
 
 def _parse_date(value: str) -> date:
@@ -310,6 +312,86 @@ async def _persist_parse_texts(args: argparse.Namespace) -> int:
     return 1 if summary.failed else 0
 
 
+async def _tag_reports(args: argparse.Namespace) -> int:
+    await init_db()
+    parser_version = _resolve_parser_version(args.parser_name, args.parser_version)
+    logging.info(
+        "Starting report tagging parser_name=%s parser_version=%s limit=%s force=%s",
+        args.parser_name,
+        parser_version,
+        args.limit,
+        args.force,
+    )
+    async with SessionLocal() as session:
+        summary = await tag_reports(
+            session,
+            parser_name=args.parser_name,
+            parser_version=parser_version,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            code=args.code,
+            limit=args.limit,
+            force=args.force,
+        )
+    logging.info(
+        "Finished report tagging candidates=%s tagged=%s skipped=%s failed=%s elapsed_seconds=%.3f",
+        summary.candidates,
+        summary.tagged,
+        summary.skipped,
+        summary.failed,
+        summary.elapsed_seconds,
+    )
+    payload = {
+        "total_pending": summary.total_pending,
+        "candidates": summary.candidates,
+        "tagged": summary.tagged,
+        "skipped": summary.skipped,
+        "failed": summary.failed,
+        "elapsed_seconds": summary.elapsed_seconds,
+        "tag_counts": summary.tag_counts,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"Total pending reports: {summary.total_pending}")
+        print(f"Candidate reports: {summary.candidates}")
+        print(f"Tagged reports: {summary.tagged}")
+        print(f"Skipped reports: {summary.skipped}")
+        print(f"Failed reports: {summary.failed}")
+        print(f"Elapsed seconds: {summary.elapsed_seconds:.2f}")
+        if summary.tag_counts:
+            print("Tag counts:")
+            for tag_slug, count in summary.tag_counts.items():
+                print(f"  {tag_slug}: {count}")
+    return 1 if summary.failed else 0
+
+
+async def _list_report_tags(args: argparse.Namespace) -> int:
+    await init_db()
+    async with SessionLocal() as session:
+        tags = await list_report_tag_summaries(session)
+    payload = [
+        {
+            "slug": tag.slug,
+            "label_ja": tag.label_ja,
+            "label_en": tag.label_en,
+            "description": tag.description,
+            "priority": tag.priority,
+            "active": tag.active,
+            "assignment_count": tag.assignment_count,
+            "primary_count": tag.primary_count,
+        }
+        for tag in tags
+    ]
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        for tag in tags:
+            count_text = f" assignments={tag.assignment_count} primary={tag.primary_count}" if args.counts else ""
+            print(f"{tag.slug}\t{tag.label_ja}\t{tag.label_en}{count_text}")
+    return 0
+
+
 def _run_scrape(args: argparse.Namespace) -> int:
     logging.info("Starting scrape date=%s persist=%s", args.date, args.persist)
     result = scrape_tdnet_by_date(args.date)
@@ -443,6 +525,39 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Backfill all versions for the selected parser name.",
     )
     parse_text_parser.set_defaults(handler=lambda args: asyncio.run(_persist_parse_texts(args)))
+
+    tag_parser = subparsers.add_parser(
+        "tag-reports",
+        help="Classify persisted TDnet reports with deterministic content tags.",
+    )
+    tag_parser.add_argument("--limit", type=int, default=1000)
+    tag_parser.add_argument("--from", dest="date_from", type=_parse_date)
+    tag_parser.add_argument("--to", dest="date_to", type=_parse_date)
+    tag_parser.add_argument("--code")
+    tag_parser.add_argument(
+        "--parser-name",
+        default=PARSER_NAME,
+        help="Parser identity to use for content cues. Defaults to the current PDF parser.",
+    )
+    tag_parser.add_argument(
+        "--parser-version",
+        help="Parser version to use for content cues. Defaults to the current version for known parsers.",
+    )
+    tag_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Recalculate tags for reports already tagged by the current tagger.",
+    )
+    tag_parser.add_argument("--json", action="store_true")
+    tag_parser.set_defaults(handler=lambda args: asyncio.run(_tag_reports(args)))
+
+    list_tags_parser = subparsers.add_parser(
+        "list-tags",
+        help="List TDnet report tag definitions and optional assignment counts.",
+    )
+    list_tags_parser.add_argument("--counts", action="store_true")
+    list_tags_parser.add_argument("--json", action="store_true")
+    list_tags_parser.set_defaults(handler=lambda args: asyncio.run(_list_report_tags(args)))
 
     review_parser = subparsers.add_parser(
         "review-parse",

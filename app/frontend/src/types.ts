@@ -16,6 +16,26 @@ export type ReportCalendarResponse = {
   days: ReportCalendarDay[];
 };
 
+export type ReportTag = {
+  slug: string;
+  label_ja: string;
+  label_en: string;
+  description: string;
+  priority: number;
+  active: boolean;
+  assignment_count: number;
+  primary_count: number;
+};
+
+export type ReportTagAssignment = {
+  slug: string;
+  label_ja: string;
+  label_en: string;
+  is_primary: boolean;
+  confidence: number;
+  source: string;
+};
+
 export type ParseSearchResult = {
   parse_job_id: number;
   file_id: number;
@@ -31,6 +51,7 @@ export type ParseSearchResult = {
   char_count: number;
   parsed_at: string | null;
   snippet: string;
+  tags: ReportTagAssignment[];
 };
 
 export type ParseSearchResponse = {
