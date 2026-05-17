@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -133,6 +134,43 @@ class DocumentParseJobRecord(Base):
     analysis_results: Mapped[list["DocumentAnalysisResultRecord"]] = relationship(
         back_populates="parse_job",
     )
+    parse_text: Mapped["DocumentParseTextRecord | None"] = relationship(
+        back_populates="parse_job",
+        cascade="all, delete-orphan",
+    )
+
+
+class DocumentParseTextRecord(Base):
+    __tablename__ = "document_parse_texts"
+    __table_args__ = (
+        UniqueConstraint("parse_job_id", name="uq_document_parse_texts_parse_job"),
+        Index("ix_document_parse_texts_parse_job", "parse_job_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parse_job_id: Mapped[int] = mapped_column(
+        ForeignKey("document_parse_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+    pages_json: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    parse_job: Mapped[DocumentParseJobRecord] = relationship(back_populates="parse_text")
 
 
 class DocumentAnalysisResultRecord(Base):

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tdnet.models import TdnetDisclosure
-from tdnet.orm import Base, DisclosureRecord, DocumentParseJobRecord
+from tdnet.orm import Base, DisclosureRecord, DocumentParseJobRecord, DocumentParseTextRecord
 from tdnet.parsers import (
     ParsedPdfArtifacts,
     default_parse_workers,
@@ -104,9 +104,14 @@ async def test_parse_pending_files_marks_completed_and_excludes_next_run(tmp_pat
         markdown_path = pdf_path.parent / "parsed" / f"{parser_name}.{parser_version}.md"
         markdown_path.parent.mkdir(parents=True, exist_ok=True)
         markdown_path.write_text("parsed text\n", encoding="utf-8")
+        pages_path = markdown_path.with_suffix(".pages.json")
+        pages_path.write_text(
+            '{"pages":[{"page":1,"markdown":"parsed text\\n","char_count":12}]}',
+            encoding="utf-8",
+        )
         return ParsedPdfArtifacts(
             markdown_path=markdown_path,
-            pages_path=markdown_path.with_suffix(".pages.json"),
+            pages_path=pages_path,
             metadata_path=markdown_path.with_suffix(".meta.json"),
             markdown_sha256="b" * 64,
             page_count=1,
@@ -144,6 +149,13 @@ async def test_parse_pending_files_marks_completed_and_excludes_next_run(tmp_pat
         assert job.parse_status == "completed"
         assert job.text_path is not None
         assert job.text_sha256 == "b" * 64
+        parse_text = await session.scalar(select(DocumentParseTextRecord))
+        assert parse_text is not None
+        assert parse_text.parse_job_id == job.id
+        assert parse_text.content_text == "parsed text\n"
+        assert parse_text.pages_json is not None
+        assert parse_text.page_count == 1
+        assert parse_text.char_count == 12
 
     await engine.dispose()
 

@@ -1,0 +1,61 @@
+"""Pydantic schemas for the TDnet review web app API."""
+from __future__ import annotations
+
+from datetime import date, datetime
+
+from pydantic import BaseModel, Field
+
+
+class HealthResponse(BaseModel):
+    status: str
+    database: str
+
+
+class ParserOption(BaseModel):
+    parser_name: str
+    parser_version: str
+    parse_jobs: int = Field(ge=0)
+    parse_texts: int = Field(ge=0)
+
+
+class ParserOptionsResponse(BaseModel):
+    parsers: list[ParserOption]
+
+
+class ParseSearchResult(BaseModel):
+    parse_job_id: int
+    file_id: int
+    disclosure_id: str
+    disclosure_date: date
+    time: str
+    code: str
+    company_name: str
+    title: str
+    parser_name: str
+    parser_version: str
+    page_count: int
+    char_count: int
+    parsed_at: datetime | None
+    snippet: str
+
+
+class ParseSearchResponse(BaseModel):
+    query: str | None
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
+    results: list[ParseSearchResult]
+
+
+class ParsedPageResponse(BaseModel):
+    page: int
+    markdown: str
+    char_count: int
+
+
+class ParseJobDetailResponse(ParseSearchResult):
+    source_url: str
+    pdf_path: str
+    text_path: str | None
+    content_text: str
+    pages: list[ParsedPageResponse]

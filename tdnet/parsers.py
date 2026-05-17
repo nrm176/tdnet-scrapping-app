@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .parse_texts import persist_parse_text_artifacts
 from .repository import (
     complete_parse_job,
     count_files_for_parse,
@@ -299,6 +300,12 @@ async def parse_pending_files(
                     parser_name=parser_name,
                     parser_version=version,
                 )
+                await persist_parse_text_artifacts(
+                    session,
+                    parse_job=parse_job,
+                    markdown_path=artifacts.markdown_path,
+                    pages_path=artifacts.pages_path,
+                )
                 await complete_parse_job(
                     session,
                     parse_job,
@@ -372,6 +379,12 @@ async def parse_pending_files(
                 )
                 continue
 
+            await persist_parse_text_artifacts(
+                session,
+                parse_job=parse_job,
+                markdown_path=artifacts.markdown_path,
+                pages_path=artifacts.pages_path,
+            )
             await complete_parse_job(
                 session,
                 parse_job,

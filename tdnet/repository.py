@@ -8,7 +8,7 @@ from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import TdnetDisclosure
-from .orm import DisclosureFileRecord, DisclosureRecord, DocumentParseJobRecord
+from .orm import DisclosureFileRecord, DisclosureRecord, DocumentParseJobRecord, DocumentParseTextRecord
 
 
 def _record_values(disclosure: TdnetDisclosure) -> dict[str, object]:
@@ -455,3 +455,48 @@ async def fail_parse_job(
     record.parse_status = "failed"
     record.last_parse_error = error[:4000]
     await session.commit()
+
+
+async def upsert_parse_text(
+    session: AsyncSession,
+    *,
+    parse_job: DocumentParseJobRecord,
+    content_text: str,
+    pages_json: dict | None,
+    page_count: int,
+    char_count: int,
+    content_sha256: str,
+) -> DocumentParseTextRecord:
+    stmt = select(DocumentParseTextRecord).where(
+        DocumentParseTextRecord.parse_job_id == parse_job.id
+    )
+    record = await session.scalar(stmt)
+    if record is None:
+        record = DocumentParseTextRecord(
+            parse_job_id=parse_job.id,
+            content_text=content_text,
+            pages_json=pages_json,
+            page_count=page_count,
+            char_count=char_count,
+            content_sha256=content_sha256,
+        )
+        session.add(record)
+    else:
+        record.content_text = content_text
+        record.pages_json = pages_json
+        record.page_count = page_count
+        record.char_count = char_count
+        record.content_sha256 = content_sha256
+    await session.commit()
+    await session.refresh(record)
+    return record
+
+
+async def get_parse_text_for_job(
+    session: AsyncSession,
+    parse_job_id: int,
+) -> DocumentParseTextRecord | None:
+    stmt = select(DocumentParseTextRecord).where(
+        DocumentParseTextRecord.parse_job_id == parse_job_id
+    )
+    return await session.scalar(stmt)

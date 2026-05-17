@@ -51,6 +51,44 @@ GET  /companies/{code}/disclosures
 The API has no auth in v1 and is read-only. Use the CLI to ingest data into
 PostgreSQL, download source files, and parse completed PDF downloads.
 
+## Review web app
+
+The parsed-text review UI lives under `app/`:
+
+```text
+app/
+  backend/   # FastAPI API for search, parser metadata, detail views, page images
+  frontend/  # Vite React review workbench
+```
+
+Start the backend and frontend in separate terminals:
+
+```bash
+uv run --extra layout uvicorn app.backend.main:app --host 127.0.0.1 --port 8000
+cd app/frontend
+npm install
+npm run dev
+```
+
+Or run both with the helper script:
+
+```bash
+./app/dev.sh
+```
+
+If `8000` or `5173` is already occupied, the script automatically chooses the
+next open port and points the Vite `/api` proxy at the selected backend.
+
+Open:
+
+```text
+http://127.0.0.1:5173/
+```
+
+The backend exposes `/api/search`, `/api/parsers`, `/api/parse-jobs/{id}`, and
+`/api/parse-jobs/{id}/page-image`. On Postgres it prepares `pg_trgm` indexes for
+Japanese-friendly substring search over `document_parse_texts.content_text`.
+
 ## CLI usage
 
 ```bash
@@ -131,6 +169,43 @@ uv run --extra layout tdnet parse --limit 100 --workers 16
 When layout is installed, its version is included in the parser identity, so
 layout-enabled parses are tracked separately from earlier markdown artifacts.
 
+Completed parse jobs also persist searchable text into Postgres in
+`document_parse_texts`. The markdown remains on disk as the durable artifact,
+while Postgres stores:
+
+- `content_text` as `TEXT`
+- `pages_json` as `JSONB` on Postgres
+- `page_count`, `char_count`, and `content_sha256`
+
+Use the backfill command to populate this cache for artifacts created before
+the table existed:
+
+```bash
+tdnet persist-parse-text --parser-name pymupdf4llm --limit 1000
+tdnet persist-parse-text --parser-name apple-vision-ocr --limit 1000
+tdnet persist-parse-text --parser-name pymupdf4llm --all-versions --limit 1000
+```
+
+Some TDnet PDFs are visually readable but contain no embedded text layer. On
+macOS, run Apple Vision OCR as a separate parse identity for sparse PyMuPDF
+outputs:
+
+```bash
+tdnet ocr --strategy low-text --limit 100 --workers 4
+tdnet ocr --file-id 15820
+```
+
+OCR jobs write their own artifacts and `document_parse_jobs` rows instead of
+overwriting PyMuPDF output:
+
+```text
+parsed/
+  apple-vision-ocr.<version>.md
+  apple-vision-ocr.<version>.pages.json
+  apple-vision-ocr.<version>.meta.json
+  ocr/apple-vision-ocr.<version>/page-001.png
+```
+
 CLI jobs write runtime logs to:
 
 ```text
@@ -141,6 +216,36 @@ The file rotates at roughly 10 MB with 10 backups, and the `logs/` directory is
 ignored by Git. Download jobs log per-file timing plus a final statistics line
 with elapsed seconds, bytes downloaded, throughput, average file seconds, and
 median file seconds.
+
+Parse jobs log structured lifecycle lines such as `parse_start`,
+`parse_item_completed`, `parse_progress`, and `parse_finished`. The final line
+includes total pending files for the parser version, scheduled files in the
+current batch, workers, elapsed seconds, files per second, average/median file
+seconds, and estimated remaining time. The CLI prints the same summary after
+each run, which makes short batches useful for estimating the full backfill.
+OCR jobs emit the same style of statistics with `ocr_start`,
+`ocr_item_completed`, `ocr_progress`, and `ocr_finished`.
+Parse text backfills emit `parse_text_backfill_start`,
+`parse_text_backfill_item_completed`, `parse_text_backfill_progress`, and
+`parse_text_backfill_finished`.
+
+## Visual parse review
+
+Use `tdnet review-parse` to generate a static HTML report for developer QA. The
+report renders selected PDF pages as images beside the parsed markdown so you
+can quickly spot layout or extraction problems:
+
+```bash
+tdnet review-parse --strategy suspicious --limit 50 --pages-per-file 2
+tdnet review-parse --strategy random --limit 25 --open
+tdnet review-parse --strategy forecast-correction --limit 50
+tdnet review-parse --parser-name apple-vision-ocr --strategy recent --limit 10
+```
+
+Reports are written under `parse-reviews/<timestamp>/index.html`, with PNG page
+renders in the report's `assets/` directory. The `suspicious` strategy ranks
+documents using lightweight quality hints such as low text volume, sparse
+multi-page output, missing page JSON, and large PDFs with little extracted text.
 
 ## CI and distribution
 

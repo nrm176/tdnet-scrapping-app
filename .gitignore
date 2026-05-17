@@ -223,9 +223,20 @@ data/
 logs/
 output/
 downloads/
+parse-reviews/
+.app-cache/
 *.json
 *.csv
 *.xlsx
+app/frontend/node_modules/
+app/frontend/dist/
+app/frontend/*.tsbuildinfo
+app/frontend/vite.config.d.ts
+app/frontend/vite.config.js
+!app/frontend/package.json
+!app/frontend/package-lock.json
+!app/frontend/tsconfig.json
+!app/frontend/tsconfig.node.json
 
 # Configuration files with sensitive data
 config.ini
