@@ -2,6 +2,8 @@ import type { ParseJobDetail, ParseSearchResponse, ParserOption, ReportCalendarR
 
 type SearchParams = {
   q?: string;
+  titleQuery?: string;
+  textQuery?: string;
   parserName?: string;
   parserVersion?: string;
   code?: string;
@@ -16,6 +18,8 @@ type SearchParams = {
 type CalendarParams = {
   month: string;
   q?: string;
+  titleQuery?: string;
+  textQuery?: string;
   parserName?: string;
   parserVersion?: string;
   code?: string;
@@ -69,6 +73,8 @@ export async function fetchTags(): Promise<ReportTag[]> {
 export async function searchParseTexts(params: SearchParams): Promise<ParseSearchResponse> {
   const query = new URLSearchParams();
   appendOptional(query, "q", params.q?.trim());
+  appendOptional(query, "title_q", params.titleQuery?.trim());
+  appendOptional(query, "text_q", params.textQuery?.trim());
   appendOptional(query, "parser_name", params.parserName);
   appendOptional(query, "parser_version", params.parserVersion);
   appendOptional(query, "code", params.code?.trim());
@@ -96,6 +102,8 @@ export async function fetchReportCalendar(params: CalendarParams): Promise<Repor
   const query = new URLSearchParams();
   appendOptional(query, "month", params.month);
   appendOptional(query, "q", params.q?.trim());
+  appendOptional(query, "title_q", params.titleQuery?.trim());
+  appendOptional(query, "text_q", params.textQuery?.trim());
   appendOptional(query, "parser_name", params.parserName);
   appendOptional(query, "parser_version", params.parserVersion);
   appendOptional(query, "code", params.code?.trim());

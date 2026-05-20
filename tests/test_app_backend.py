@@ -89,6 +89,27 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
 
         options = await list_parser_options(session)
         response = await search_parse_texts(session, query="18,000", parser_name="apple-vision-ocr")
+        title_response = await search_parse_texts(
+            session,
+            title_query="業績予想",
+            parser_name="apple-vision-ocr",
+        )
+        text_response = await search_parse_texts(
+            session,
+            text_query="18,000",
+            parser_name="apple-vision-ocr",
+        )
+        title_miss_response = await search_parse_texts(
+            session,
+            title_query="18,000",
+            parser_name="apple-vision-ocr",
+        )
+        combined_response = await search_parse_texts(
+            session,
+            title_query="業績予想",
+            text_query="18,000",
+            parser_name="apple-vision-ocr",
+        )
         tagged_response = await search_parse_texts(
             session,
             parser_name="apple-vision-ocr",
@@ -114,6 +135,10 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
     assert response.total == 1
     assert response.results[0].code == "85600"
     assert "18,000" in response.results[0].snippet
+    assert title_response.total == 1
+    assert text_response.total == 1
+    assert title_miss_response.total == 0
+    assert combined_response.total == 1
     assert tagged_response.total == 1
     assert tagged_response.results[0].tags[0].slug == "forecast_revision"
     assert missing_tag_response.total == 0

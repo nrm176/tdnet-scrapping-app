@@ -23,7 +23,7 @@ from .orm import (
 )
 
 TAGGER_NAME = "tdnet-deterministic-hybrid"
-TAGGER_VERSION = "1"
+TAGGER_VERSION = "5"
 TagSource = Literal["title", "content", "title+content"]
 TagMode = Literal["any", "all"]
 
@@ -129,50 +129,64 @@ TAG_RULES: tuple[TagRule, ...] = (
         "earnings_materials",
         title_patterns=(
             r"決算説明資料",
+            r"決算説明会資料",
+            r"決算説明会レポート",
+            r"決算説明会.*書き起こし",
+            r"決算.*説明.*資料",
+            r"(?:通期|四半期|中間期).*説明資料",
             r"決算補足",
             r"補足説明資料",
             r"補足資料",
+            r"決算資料",
             r"決算概要",
+            r"決算概況",
+            r"決算サマリー",
+            r"決算報告",
+            r"決算.*想定質問",
             r"決算参考資料",
             r"fact sheet",
             r"インベスターズガイド",
             r"financial results",
         ),
-        content_patterns=(r"決算説明資料", r"業績ハイライト", r"financial results"),
+        content_patterns=(r"^.{0,80}(決算説明資料|業績ハイライト|financial results)",),
     ),
     TagRule(
         "forecast_revision",
         title_patterns=(
-            r"業績予想",
+            r"業績予想(?:値|数値)?",
             r"予想値",
             r"業績予測",
-            r"実績値との差異",
-            r"実績との差異",
-            r"決算値との差異",
+            r"予想.*実績.*差異",
+            r"実績.*予想.*差異",
+            r"業績.*差異",
+            r"(?:通期|四半期|中間期).*実績.*差異",
+            r"実績値?(?:と|との|の)?差異",
+            r"実績値?との差異",
+            r"決算(?:値|数値).*差異",
             r"通期.*予想",
         ),
-        content_patterns=(r"上方修正", r"下方修正", r"今回修正予想", r"修正予想", r"前回発表予想"),
+        content_patterns=(
+            r"業績予想.{0,80}(?:上方修正|下方修正|修正予想)",
+            r"(?:今回)?修正予想",
+            r"(?:通期|四半期|中間期|業績).{0,80}実績.{0,40}差異",
+        ),
     ),
     TagRule(
         "etf_fund_disclosure",
         title_patterns=(r"\bETF\b", r"\bETN\b", r"\bREIT\b", r"投信", r"上場投信", r"ファンド", r"基準価額", r"市場価格"),
-        content_patterns=(r"\bETF\b", r"\bETN\b", r"\bREIT\b", r"投資信託", r"基準価額", r"市場価格"),
     ),
     TagRule(
         "dividend_distribution",
         title_patterns=(r"配当", r"剰余金の配当", r"増配", r"減配", r"収益分配", r"分配金"),
-        content_patterns=(r"1株当たり配当", r"配当予想", r"配当金", r"分配金", r"剰余金の配当"),
     ),
-    TagRule("share_buyback", title_patterns=(r"自己株式", r"自社株", r"金庫株"), content_patterns=(r"自己株式", r"取得株式総数")),
+    TagRule("share_buyback", title_patterns=(r"自己株式", r"自社株", r"金庫株")),
     TagRule(
         "management_change",
         title_patterns=(r"人事", r"役員", r"代表取締役", r"取締役", r"監査役", r"執行役員", r"社長交代"),
-        content_patterns=(r"代表取締役", r"取締役候補", r"監査役候補", r"執行役員"),
     ),
     TagRule(
         "governance_meeting",
         title_patterns=(r"株主総会", r"招集", r"定款", r"議決権", r"株主提案", r"コーポレート.?ガバナンス", r"ガバナンス報告"),
-        content_patterns=(r"定時株主総会", r"議案", r"議決権", r"コーポレート.?ガバナンス"),
     ),
     TagRule(
         "m_and_a_reorganization",
@@ -188,11 +202,12 @@ TAG_RULES: tuple[TagRule, ...] = (
             r"買収",
             r"譲渡",
             r"取得",
-            r"\bTOB\b",
+            r"MBO",
+            r"TOB",
             r"公開買付",
             r"経営統合",
         ),
-        content_patterns=(r"公開買付", r"経営統合", r"株式譲渡", r"子会社化", r"連結子会社"),
+        content_patterns=(r"公開買付け?を(開始|実施)", r"経営統合に向け", r"株式譲渡契約", r"子会社化すること"),
     ),
     TagRule(
         "financing_capital_action",
@@ -211,30 +226,30 @@ TAG_RULES: tuple[TagRule, ...] = (
             r"資本準備金",
             r"立会外分売",
         ),
-        content_patterns=(r"第三者割当", r"新株予約権", r"資金調達", r"借入金", r"社債"),
+        content_patterns=(r"第三者割当による", r"新株予約権を発行", r"資金調達を行", r"社債を発行"),
     ),
     TagRule(
         "strategy_plan",
-        title_patterns=(r"中期経営計画", r"事業計画", r"成長可能性", r"資本コスト", r"株価を意識", r"経営方針"),
-        content_patterns=(r"中期経営計画", r"成長戦略", r"資本コスト", r"企業価値向上"),
+        title_patterns=(r"中期経営計画", r"事業計画", r"成長可能性", r"資本コスト", r"株価を意識", r"経営方針", r"経営戦略"),
+        content_patterns=(r"中期経営計画を(策定|改定|修正)", r"成長戦略", r"資本コストや株価を意識"),
     ),
     TagRule(
         "extraordinary_accounting",
         title_patterns=(r"特別利益", r"特別損失", r"減損", r"貸倒", r"引当", r"固定資産", r"棚卸資産", r"営業外収益", r"営業外費用", r"法人税等調整額", r"有価証券含み損"),
-        content_patterns=(r"特別利益", r"特別損失", r"減損損失", r"営業外収益", r"営業外費用"),
+        content_patterns=(r"特別利益を計上", r"特別損失を計上", r"減損損失を計上", r"営業外収益を計上", r"営業外費用を計上"),
     ),
     TagRule(
         "audit_internal_control",
-        title_patterns=(r"監査", r"内部統制", r"第三者委員会", r"特別調査委員会", r"調査報告書", r"重要な不備", r"会計監査人", r"公認会計士"),
-        content_patterns=(r"内部統制", r"監査法人", r"会計監査人", r"監査報告", r"重要な不備", r"調査報告書"),
+        title_patterns=(r"監査", r"内部統制", r"第三者委員会", r"特別調査", r"調査報告書", r"重要な不備", r"会計監査人", r"公認会計士"),
+        content_patterns=(r"内部統制の開示すべき重要な不備", r"財務報告に係る内部統制", r"第三者委員会の調査報告書", r"特別調査委員会の調査報告書"),
     ),
     TagRule(
         "shareholder_ownership_listing",
         title_patterns=(r"主要株主", r"支配株主", r"親会社", r"上場廃止", r"整理銘柄", r"貸借銘柄", r"投資単位", r"所有割合", r"大株主"),
-        content_patterns=(r"主要株主", r"支配株主", r"親会社", r"上場廃止", r"所有割合"),
+        content_patterns=(r"主要株主である筆頭株主", r"支配株主等に関する事項", r"上場廃止となる見込み"),
     ),
-    TagRule("shareholder_benefit", title_patterns=(r"株主優待",), content_patterns=(r"株主優待", r"優待制度")),
-    TagRule("correction_change", title_patterns=(r"訂正", r"変更", r"修正", r"延期", r"改定", r"一部変更"), content_patterns=(r"訂正", r"変更", r"修正")),
+    TagRule("shareholder_benefit", title_patterns=(r"株主優待",)),
+    TagRule("correction_change", title_patterns=(r"訂正", r"変更", r"修正", r"延期", r"改定", r"一部変更")),
 )
 
 
@@ -248,6 +263,8 @@ def normalize_tag_text(value: str | None) -> str:
 def _matching_patterns(patterns: Sequence[str], text: str) -> list[str]:
     if not text:
         return []
+    if isinstance(patterns, str):
+        patterns = (patterns,)
     return [pattern for pattern in patterns if re.search(pattern, text, flags=re.IGNORECASE)]
 
 
@@ -298,8 +315,12 @@ def classify_report(title: str, content_text: str | None = None) -> ReportClassi
             evidence={"reason": "no_rule_match"},
         )
 
+    title_backed_matches = {
+        slug: payload for slug, payload in matched.items() if payload.source in {"title", "title+content"}
+    }
+    primary_pool = title_backed_matches or matched
     primary_slug = min(
-        matched,
+        primary_pool,
         key=lambda slug: (
             TAG_DEFINITION_BY_SLUG[slug].priority,
             -matched[slug].confidence,

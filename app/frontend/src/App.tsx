@@ -33,6 +33,32 @@ type CalendarCell = {
   isWeekend: boolean;
 };
 
+type SearchCriteria = {
+  titleQuery: string;
+  textQuery: string;
+  code: string;
+  dateFrom: string;
+  dateTo: string;
+  tags: string[];
+  tagMode: "any" | "all";
+  parserValue: string;
+};
+
+type SearchCriteriaOverrides = Partial<Omit<SearchCriteria, "tags">> & {
+  tags?: string[];
+};
+
+const EMPTY_CRITERIA: SearchCriteria = {
+  titleQuery: "",
+  textQuery: "",
+  code: "",
+  dateFrom: "",
+  dateTo: "",
+  tags: [],
+  tagMode: "any",
+  parserValue: "",
+};
+
 function parserKey(option: ParserOption): string {
   return `${option.parser_name}::${option.parser_version}`;
 }
@@ -75,8 +101,8 @@ function formatMonth(monthKey: string): string {
 function buildCalendarCells(monthKey: string): CalendarCell[] {
   const [year, month] = monthKey.split("-").map(Number);
   const firstOfMonth = new Date(year, month - 1, 1);
-  const mondayOffset = (firstOfMonth.getDay() + 6) % 7;
-  const startDate = new Date(year, month - 1, 1 - mondayOffset);
+  const sundayOffset = firstOfMonth.getDay();
+  const startDate = new Date(year, month - 1, 1 - sundayOffset);
 
   return Array.from({ length: 42 }, (_, index) => {
     const date = new Date(startDate);
@@ -95,7 +121,8 @@ function App() {
   const [parsers, setParsers] = useState<ParserOption[]>([]);
   const [tags, setTags] = useState<ReportTag[]>([]);
   const [parserValue, setParserValue] = useState("");
-  const [query, setQuery] = useState("");
+  const [titleQuery, setTitleQuery] = useState("");
+  const [textQuery, setTextQuery] = useState("");
   const [code, setCode] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -105,15 +132,16 @@ function App() {
   const [calendarDays, setCalendarDays] = useState<ReportCalendarDay[]>([]);
   const [results, setResults] = useState<ParseSearchResult[]>([]);
   const [total, setTotal] = useState(0);
+  const [appliedCriteria, setAppliedCriteria] = useState<SearchCriteria>(EMPTY_CRITERIA);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<ParseJobDetail | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [initialResultsLoaded, setInitialResultsLoaded] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const parserSelection = useMemo(() => parseParserKey(parserValue), [parserValue]);
   const selectedPage = detail?.pages[pageIndex] ?? detail?.pages[0] ?? null;
   const visibleText = selectedPage?.markdown || detail?.content_text || "";
   const calendarCells = useMemo(() => buildCalendarCells(calendarMonth), [calendarMonth]);
@@ -133,15 +161,57 @@ function App() {
     () => calendarDays.reduce((sum, day) => sum + day.report_count, 0),
     [calendarDays],
   );
+  const tagLabelBySlug = useMemo(() => new Map(tags.map((tag) => [tag.slug, tag.label_ja])), [tags]);
+  const appliedParserLabel = useMemo(() => {
+    if (!appliedCriteria.parserValue) {
+      return "All parsers";
+    }
+    return appliedCriteria.parserValue.split("::")[0] || "All parsers";
+  }, [appliedCriteria.parserValue]);
+  const appliedCriteriaItems = useMemo(() => {
+    const items: { label: string; value: string }[] = [];
+    items.push({ label: "Parser", value: appliedParserLabel });
+    if (appliedCriteria.titleQuery) {
+      items.push({ label: "Title", value: appliedCriteria.titleQuery });
+    }
+    if (appliedCriteria.textQuery) {
+      items.push({ label: "Full text", value: appliedCriteria.textQuery });
+    }
+    if (appliedCriteria.code) {
+      items.push({ label: "Code", value: appliedCriteria.code });
+    }
+    if (appliedCriteria.dateFrom || appliedCriteria.dateTo) {
+      const value =
+        appliedCriteria.dateFrom && appliedCriteria.dateTo && appliedCriteria.dateFrom === appliedCriteria.dateTo
+          ? appliedCriteria.dateFrom
+          : `${appliedCriteria.dateFrom || "any"} to ${appliedCriteria.dateTo || "any"}`;
+      items.push({ label: "Date", value });
+    }
+    if (appliedCriteria.tags.length) {
+      const value = appliedCriteria.tags.map((slug) => tagLabelBySlug.get(slug) ?? slug).join(", ");
+      items.push({ label: `Tags ${appliedCriteria.tagMode}`, value });
+    }
+    return items;
+  }, [appliedCriteria, appliedParserLabel, tagLabelBySlug]);
   const selectedDate = dateFrom && dateFrom === dateTo ? dateFrom : "";
+
+  function buildCriteria(overrides: SearchCriteriaOverrides = {}): SearchCriteria {
+    return {
+      titleQuery: overrides.titleQuery ?? titleQuery,
+      textQuery: overrides.textQuery ?? textQuery,
+      code: overrides.code ?? code,
+      dateFrom: overrides.dateFrom ?? dateFrom,
+      dateTo: overrides.dateTo ?? dateTo,
+      tags: overrides.tags ?? selectedTags,
+      tagMode: overrides.tagMode ?? tagMode,
+      parserValue: overrides.parserValue ?? parserValue,
+    };
+  }
 
   async function loadParsers() {
     const options = await fetchParsers();
     setError(null);
     setParsers(options);
-    if (!parserValue && options.length) {
-      setParserValue(parserKey(options[0]));
-    }
   }
 
   async function loadTags() {
@@ -153,16 +223,25 @@ function App() {
   async function loadRecent() {
     setLoading(true);
     setError(null);
+    const criteria = buildCriteria({
+      titleQuery: "",
+      textQuery: "",
+      code: "",
+      dateFrom: "",
+      dateTo: "",
+    });
+    const selection = parseParserKey(criteria.parserValue);
     try {
       const response = await fetchReviewQueue({
-        ...parserSelection,
-        tags: selectedTags,
-        tagMode,
+        ...selection,
+        tags: criteria.tags,
+        tagMode: criteria.tagMode,
         limit: 25,
       });
       setResults(response.results);
       setTotal(response.total);
       setSelectedId(response.results[0]?.parse_job_id ?? null);
+      setAppliedCriteria(criteria);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load review queue");
     } finally {
@@ -172,13 +251,16 @@ function App() {
 
   async function loadCalendar() {
     setCalendarLoading(true);
+    const selection = parseParserKey(appliedCriteria.parserValue);
     try {
       const response = await fetchReportCalendar({
         month: calendarMonth,
-        code,
-        tags: selectedTags,
-        tagMode,
-        ...parserSelection,
+        titleQuery: appliedCriteria.titleQuery,
+        textQuery: appliedCriteria.textQuery,
+        code: appliedCriteria.code,
+        tags: appliedCriteria.tags,
+        tagMode: appliedCriteria.tagMode,
+        ...selection,
       });
       setError(null);
       setCalendarDays(response.days);
@@ -189,26 +271,28 @@ function App() {
     }
   }
 
-  async function runSearch(event?: FormEvent, overrides: { dateFrom?: string; dateTo?: string } = {}) {
+  async function runSearch(event?: FormEvent, overrides: SearchCriteriaOverrides = {}) {
     event?.preventDefault();
     setLoading(true);
     setError(null);
-    const nextDateFrom = overrides.dateFrom ?? dateFrom;
-    const nextDateTo = overrides.dateTo ?? dateTo;
+    const criteria = buildCriteria(overrides);
+    const selection = parseParserKey(criteria.parserValue);
     try {
       const response = await searchParseTexts({
-        q: query,
-        code,
-        dateFrom: nextDateFrom,
-        dateTo: nextDateTo,
-        tags: selectedTags,
-        tagMode,
-        ...parserSelection,
+        titleQuery: criteria.titleQuery,
+        textQuery: criteria.textQuery,
+        code: criteria.code,
+        dateFrom: criteria.dateFrom,
+        dateTo: criteria.dateTo,
+        tags: criteria.tags,
+        tagMode: criteria.tagMode,
+        ...selection,
         limit: 25,
       });
       setResults(response.results);
       setTotal(response.total);
       setSelectedId(response.results[0]?.parse_job_id ?? null);
+      setAppliedCriteria(criteria);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed");
     } finally {
@@ -233,22 +317,47 @@ function App() {
     );
   }
 
+  function toggleTag(tagSlug: string) {
+    const nextTags = selectedTags.includes(tagSlug)
+      ? selectedTags.filter((slug) => slug !== tagSlug)
+      : [...selectedTags, tagSlug];
+    setSelectedTags(nextTags);
+    runSearch(undefined, { tags: nextTags }).catch((err) =>
+      setError(err instanceof Error ? err.message : "Search failed"),
+    );
+  }
+
+  function changeTagMode(value: "any" | "all") {
+    setTagMode(value);
+    runSearch(undefined, { tagMode: value }).catch((err) =>
+      setError(err instanceof Error ? err.message : "Search failed"),
+    );
+  }
+
+  function changeParser(value: string) {
+    setParserValue(value);
+    runSearch(undefined, { parserValue: value }).catch((err) =>
+      setError(err instanceof Error ? err.message : "Search failed"),
+    );
+  }
+
   useEffect(() => {
     loadParsers().catch((err) => setError(err instanceof Error ? err.message : "Failed to load parsers"));
     loadTags().catch((err) => setError(err instanceof Error ? err.message : "Failed to load tags"));
   }, []);
 
   useEffect(() => {
-    if (parsers.length && !results.length) {
+    if (parsers.length && !initialResultsLoaded) {
+      setInitialResultsLoaded(true);
       loadRecent().catch((err) => setError(err instanceof Error ? err.message : "Failed to load recent parses"));
     }
-  }, [parsers.length, parserValue]);
+  }, [parsers.length, initialResultsLoaded]);
 
   useEffect(() => {
     if (parsers.length) {
       loadCalendar().catch((err) => setError(err instanceof Error ? err.message : "Failed to load calendar"));
     }
-  }, [calendarMonth, code, parsers.length, parserValue, selectedTags, tagMode]);
+  }, [calendarMonth, parsers.length, appliedCriteria]);
 
   useEffect(() => {
     const activeDate = dateFrom || dateTo;
@@ -287,70 +396,88 @@ function App() {
       </header>
 
       <form className="search-band" onSubmit={runSearch}>
-        <label className="field field-query">
-          <span>Text query</span>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="業績予想, 18,000, company name..."
-          />
-        </label>
-        <label className="field">
-          <span>Parser</span>
-          <select value={parserValue} onChange={(event) => setParserValue(event.target.value)}>
-            <option value="">All parsers</option>
-            {parsers.map((option) => (
-              <option key={parserKey(option)} value={parserKey(option)}>
-                {option.parser_name} · {option.parse_texts}/{option.parse_jobs}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field field-code">
-          <span>Code</span>
-          <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="85600" />
-        </label>
-        <label className="field field-tags">
-          <span>Tags</span>
-          <select
-            multiple
-            value={selectedTags}
-            onChange={(event) =>
-              setSelectedTags(Array.from(event.currentTarget.selectedOptions, (option) => option.value))
-            }
-          >
-            {tags.map((tag) => (
-              <option key={tag.slug} value={tag.slug}>
-                {tag.label_ja} · {formatNumber(tag.assignment_count)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field field-mode">
-          <span>Mode</span>
-          <select value={tagMode} onChange={(event) => setTagMode(event.target.value as "any" | "all")}>
-            <option value="any">Any</option>
-            <option value="all">All</option>
-          </select>
-        </label>
-        <label className="field field-date">
-          <span>From</span>
-          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
-        </label>
-        <label className="field field-date">
-          <span>To</span>
-          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
-        </label>
-        <button className="icon-button primary" type="submit" title="Search parsed text">
-          <Search size={18} />
-          <span>Search</span>
-        </button>
-        <button className="icon-button" type="button" onClick={loadRecent} title="Load recent parse jobs">
-          <RefreshCw size={18} />
-        </button>
+        <div className="search-fields">
+          <label className="field field-title-query">
+            <span>Title</span>
+            <input
+              value={titleQuery}
+              onChange={(event) => setTitleQuery(event.target.value)}
+              placeholder="業績予想, 決算短信..."
+            />
+          </label>
+          <label className="field field-text-query">
+            <span>Full text</span>
+            <input
+              value={textQuery}
+              onChange={(event) => setTextQuery(event.target.value)}
+              placeholder="18,000, 上方修正..."
+            />
+          </label>
+          <label className="field field-parser">
+            <span>Parser</span>
+            <select value={parserValue} onChange={(event) => changeParser(event.target.value)}>
+              <option value="">All parsers</option>
+              {parsers.map((option) => (
+                <option key={parserKey(option)} value={parserKey(option)}>
+                  {option.parser_name} · {option.parse_texts}/{option.parse_jobs}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field field-code">
+            <span>Code</span>
+            <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="85600" />
+          </label>
+          <label className="field field-date">
+            <span>From</span>
+            <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
+          </label>
+          <label className="field field-date">
+            <span>To</span>
+            <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
+          </label>
+          <div className="search-actions">
+            <button className="icon-button primary" type="submit" title="Search parsed text">
+              <Search size={18} />
+              <span>Search</span>
+            </button>
+            <button className="icon-button" type="button" onClick={loadRecent} title="Load recent parse jobs">
+              <RefreshCw size={18} />
+            </button>
+          </div>
+        </div>
+        <div className="tag-criteria-row">
+          <div className="tag-criteria-header">
+            <span>Tags</span>
+            <label className="field field-mode">
+              <span>Mode</span>
+              <select value={tagMode} onChange={(event) => changeTagMode(event.target.value as "any" | "all")}>
+                <option value="any">Any</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+          </div>
+          <div className="tag-filter-list" aria-label="Report tag filters">
+            {tags.map((tag) => {
+              const selected = selectedTags.includes(tag.slug);
+              return (
+                <button
+                  key={tag.slug}
+                  className={`tag-filter-pill ${selected ? "selected" : ""}`}
+                  type="button"
+                  title={`${tag.label_en} · ${formatNumber(tag.assignment_count)} reports`}
+                  aria-pressed={selected}
+                  onClick={() => toggleTag(tag.slug)}
+                >
+                  <span>{tag.label_ja}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </form>
 
-      {error ? <div className="error-band">{error}</div> : null}
+      <div className={`error-band ${error ? "" : "empty"}`}>{error}</div>
 
       <main className="workspace">
         <aside className="results-pane">
@@ -396,7 +523,7 @@ function App() {
               </button>
             </div>
             <div className="calendar-weekdays">
-              {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
+              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
                 <span key={day}>{day}</span>
               ))}
             </div>
@@ -434,9 +561,17 @@ function App() {
             </div>
           </section>
           <div className="pane-header">
-            <div>
+            <div className="match-summary">
               <strong>{loading ? "Loading..." : `${formatNumber(total)} matches`}</strong>
               <span>{results.length} shown</span>
+            </div>
+            <div className="applied-criteria" aria-label="Applied search criteria">
+              {appliedCriteriaItems.map((item) => (
+                <span className="criteria-pill" key={`${item.label}:${item.value}`}>
+                  <strong>{item.label}</strong>
+                  <span>{item.value}</span>
+                </span>
+              ))}
             </div>
           </div>
           <div className="result-list">
@@ -449,10 +584,11 @@ function App() {
               >
                 <div className="result-line">
                   <span className="date">{result.disclosure_date}</span>
+                  <span className="time">{result.time}</span>
                   <span className="code">{result.code}</span>
+                  <span className="company">{result.company_name}</span>
                 </div>
                 <div className="result-title">{result.title}</div>
-                <div className="company">{result.company_name}</div>
                 {result.tags.length ? (
                   <div className="tag-chip-list">
                     {result.tags.map((tag) => (

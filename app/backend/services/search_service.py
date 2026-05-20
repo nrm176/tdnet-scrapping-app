@@ -37,6 +37,10 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _like_pattern(value: str) -> str:
+    return f"%{_escape_like(value.strip())}%"
+
+
 def _make_snippet(text: str, query: str | None, *, radius: int = 160) -> str:
     normalized = " ".join(text.split())
     if not normalized:
@@ -91,6 +95,8 @@ def _apply_filters(
     stmt: Select,
     *,
     query: str | None = None,
+    title_query: str | None = None,
+    text_query: str | None = None,
     parser_name: str | None = None,
     parser_version: str | None = None,
     code: str | None = None,
@@ -110,8 +116,12 @@ def _apply_filters(
     if date_to:
         stmt = stmt.where(DisclosureRecord.disclosure_date <= date_to)
     stmt = _apply_disclosure_tag_filters(stmt, tags=tags, tag_mode=tag_mode)
+    if title_query:
+        stmt = stmt.where(DisclosureRecord.title.ilike(_like_pattern(title_query), escape="\\"))
+    if text_query:
+        stmt = stmt.where(DocumentParseTextRecord.content_text.ilike(_like_pattern(text_query), escape="\\"))
     if query:
-        pattern = f"%{_escape_like(query.strip())}%"
+        pattern = _like_pattern(query)
         stmt = stmt.where(
             or_(
                 DocumentParseTextRecord.content_text.ilike(pattern, escape="\\"),
@@ -158,6 +168,7 @@ def _row_to_result(
     disclosure: DisclosureRecord,
     *,
     query: str | None,
+    snippet_query: str | None = None,
     tags: list[ReportTagAssignmentResponse] | None = None,
 ) -> ParseSearchResult:
     return ParseSearchResult(
@@ -174,7 +185,7 @@ def _row_to_result(
         page_count=parse_text.page_count,
         char_count=parse_text.char_count,
         parsed_at=parse_job.parsed_at,
-        snippet=_make_snippet(parse_text.content_text, query),
+        snippet=_make_snippet(parse_text.content_text, snippet_query or query),
         tags=tags or [],
     )
 
@@ -225,6 +236,8 @@ async def search_parse_texts(
     session: AsyncSession,
     *,
     query: str | None = None,
+    title_query: str | None = None,
+    text_query: str | None = None,
     parser_name: str | None = None,
     parser_version: str | None = None,
     code: str | None = None,
@@ -236,9 +249,13 @@ async def search_parse_texts(
     offset: int = 0,
 ) -> ParseSearchResponse:
     normalized_query = query.strip() if query and query.strip() else None
+    normalized_title_query = title_query.strip() if title_query and title_query.strip() else None
+    normalized_text_query = text_query.strip() if text_query and text_query.strip() else None
     filtered = _apply_filters(
         _base_join(),
         query=normalized_query,
+        title_query=normalized_title_query,
+        text_query=normalized_text_query,
         parser_name=parser_name,
         parser_version=parser_version,
         code=code,
@@ -274,6 +291,7 @@ async def search_parse_texts(
                 file_record,
                 disclosure,
                 query=normalized_query,
+                snippet_query=normalized_text_query,
                 tags=_tag_views_to_response(tag_map.get(disclosure.id, [])),
             )
             for parse_job, parse_text, file_record, disclosure in rows
@@ -287,6 +305,8 @@ async def list_report_calendar_days(
     month_start: date,
     month_end: date,
     query: str | None = None,
+    title_query: str | None = None,
+    text_query: str | None = None,
     parser_name: str | None = None,
     parser_version: str | None = None,
     code: str | None = None,
@@ -304,6 +324,8 @@ async def list_report_calendar_days(
     )
     if code:
         record_stmt = record_stmt.where(DisclosureRecord.code == code.strip().upper())
+    if title_query and title_query.strip():
+        record_stmt = record_stmt.where(DisclosureRecord.title.ilike(_like_pattern(title_query), escape="\\"))
     record_stmt = _apply_disclosure_tag_filters(record_stmt, tags=tags, tag_mode=tag_mode)
 
     record_counts = {
@@ -312,9 +334,13 @@ async def list_report_calendar_days(
     }
 
     normalized_query = query.strip() if query and query.strip() else None
+    normalized_title_query = title_query.strip() if title_query and title_query.strip() else None
+    normalized_text_query = text_query.strip() if text_query and text_query.strip() else None
     filtered = _apply_filters(
         _base_join(),
         query=normalized_query,
+        title_query=normalized_title_query,
+        text_query=normalized_text_query,
         parser_name=parser_name,
         parser_version=parser_version,
         code=code,

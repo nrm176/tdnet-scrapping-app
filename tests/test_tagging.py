@@ -33,6 +33,59 @@ def test_classify_report_prefers_specific_primary_tag():
     assert "correction_change" in slugs
 
 
+@pytest.mark.parametrize(
+    "title",
+    [
+        "個別業績の差異に関するお知らせ",
+        "2026年３月期通期個別業績の前期決算数値との差異に関するお知らせ",
+        "2026年３月期連結業績速報値と2025年３月期連結業績との差異見込みに関するお知らせ",
+        "2026年9月期第２四半期と実績の差異に関するお知らせ",
+    ],
+)
+def test_classify_report_handles_common_variance_title_patterns(title: str):
+    classification = classify_report(title)
+    slugs = [assignment.slug for assignment in classification.assignments]
+
+    assert classification.primary_tag == "forecast_revision"
+    assert "forecast_revision" in slugs
+
+
+def test_classify_report_uses_title_backed_primary_over_content_cue():
+    classification = classify_report("中期経営計画の改定に関するお知らせ", "下方修正")
+    slugs = [assignment.slug for assignment in classification.assignments]
+
+    assert classification.primary_tag == "strategy_plan"
+    assert "strategy_plan" in slugs
+    assert "forecast_revision" not in slugs
+
+
+def test_classify_report_keeps_earnings_material_primary_with_forecast_content():
+    classification = classify_report("2026年3月期 決算説明会資料", "今回修正予想")
+    slugs = [assignment.slug for assignment in classification.assignments]
+
+    assert classification.primary_tag == "earnings_materials"
+    assert "earnings_materials" in slugs
+    assert "forecast_revision" in slugs
+
+
+def test_classify_report_tags_quarterly_explanation_materials():
+    classification = classify_report("2026年９月期 第２四半期説明資料", "今回修正予想")
+    slugs = [assignment.slug for assignment in classification.assignments]
+
+    assert classification.primary_tag == "earnings_materials"
+    assert "earnings_materials" in slugs
+    assert "forecast_revision" in slugs
+
+
+def test_classify_report_keeps_mbo_primary_with_forecast_content():
+    classification = classify_report("ＭＢＯの実施及び応募の推奨に関するお知らせ", "通期業績予想と実績値との差異")
+    slugs = [assignment.slug for assignment in classification.assignments]
+
+    assert classification.primary_tag == "m_and_a_reorganization"
+    assert "m_and_a_reorganization" in slugs
+    assert "forecast_revision" in slugs
+
+
 def test_classify_report_uses_other_fallback():
     classification = classify_report("お知らせ")
 

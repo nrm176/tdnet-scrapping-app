@@ -138,6 +138,11 @@ async def count_disclosures(
     return int(await session.scalar(stmt) or 0)
 
 
+async def get_latest_disclosure_date(session: AsyncSession) -> date | None:
+    """Return the newest disclosure date currently persisted."""
+    return await session.scalar(select(func.max(DisclosureRecord.disclosure_date)))
+
+
 async def iter_disclosures_for_download(
     session: AsyncSession,
     *,

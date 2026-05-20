@@ -17,7 +17,7 @@ from .parsing import (
     has_next_page,
 )
 from .services import scrape_tdnet_by_date
-from .repository import query_disclosures, upsert_disclosures, get_disclosure
+from .repository import get_disclosure, get_latest_disclosure_date, query_disclosures, upsert_disclosures
 from .artifacts import download_pending_files
 
 __all__ = [
@@ -32,6 +32,7 @@ __all__ = [
     "extract_structured_data_from_page",
     "download_pending_files",
     "get_disclosure",
+    "get_latest_disclosure_date",
     "has_next_page",
     "query_disclosures",
     "scrape_tdnet_by_date",

@@ -99,18 +99,46 @@ tdnet download --limit 100
 tdnet parse --limit 100 --workers 16
 ```
 
-Run the default end-to-end pipeline for the last 30 days:
+Run the default end-to-end pipeline for the last 30 days. This starts
+Postgres, installs the local package if needed, scrapes, downloads, parses,
+persists searchable parse text, and updates report tags:
 
 ```bash
 scripts/tdnet_all_in_one.sh
 ```
+
+By default, the script reads the latest `tdnet_disclosures.disclosure_date`
+from Postgres and uses it as the scrape checkpoint. It starts at the day after
+that latest stored date, while still refreshing today when today's records are
+already present. Use `--scrape-lookback-days N` to include overlap days, or
+`--force-scrape` to ignore the checkpoint and scrape the full requested range.
 
 Useful variants:
 
 ```bash
 scripts/tdnet_all_in_one.sh --days 7 --parse-workers 16
 scripts/tdnet_all_in_one.sh --start-date 2026-05-01 --end-date 2026-05-15 --retry-failed
+scripts/tdnet_all_in_one.sh --days 30 --force-scrape
+scripts/tdnet_all_in_one.sh --scrape-lookback-days 2
 scripts/tdnet_all_in_one.sh --with-ocr --with-review
+scripts/tdnet_all_in_one.sh --days 7 --retag
+scripts/tdnet_all_in_one_with_ocr.sh --days 7
+```
+
+Each execution writes a dedicated log file under `logs/` and updates a stable
+pointer to the newest run:
+
+```text
+logs/tdnet-all-in-one-<timestamp>-<pid>.log
+logs/tdnet-all-in-one-latest.log
+```
+
+The pipeline log records the selected options, each step start/finish, each
+command, elapsed time, command output, and the failing step/exit code when a
+run stops early. It also records scrape checkpoint decisions, for example:
+
+```text
+CHECKPOINT source=postgres latest_disclosure_date=2026-05-18 lookback_days=0 checkpoint_start=2026-05-19 requested_start=2026-04-20 effective_start=2026-05-19 end=2026-05-19 applied=true
 ```
 
 The legacy form remains supported:
