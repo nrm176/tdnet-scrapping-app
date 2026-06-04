@@ -1,7 +1,7 @@
 # TDnet Review Architecture
 
 This diagram shows the current data flow from TDnet ingestion through parsed-text
-review and deterministic report tagging. For table-level relationships, see
+review, deterministic report tagging, and financial fact analysis. For table-level relationships, see
 [`data-model.md`](data-model.md).
 
 ```mermaid
@@ -14,6 +14,7 @@ flowchart LR
     download --> parse["tdnet parse / tdnet ocr / tdnet parse-ixbrl<br/>extract markdown + page JSON"]
     parse --> persistText["persist-parse-text<br/>upsert searchable text"]
     persistText --> tagger["tdnet tag-reports<br/>deterministic hybrid tagger"]
+    persistText --> analyzeFinancials["tdnet analyze-financials<br/>deterministic financial facts"]
   end
 
   subgraph pg["PostgreSQL"]
@@ -41,6 +42,7 @@ flowchart LR
   tagger --> tagDefs
   tagger --> tagAssignments
   tagger -. "optional payloads" .-> analysisResults
+  analyzeFinancials --> analysisResults
 
   tdnetDisclosures --> disclosureFiles
   disclosureFiles --> parseJobs

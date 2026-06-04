@@ -129,6 +129,13 @@ tdnet parse-ixbrl --strategy garbled --limit 100
 tdnet parse-ixbrl --strategy forecast-correction --limit 100
 ```
 
+Extract deterministic financial facts into `document_analysis_results`:
+
+```bash
+tdnet analyze-financials --limit 1000
+tdnet analyze-financials --retry-failed --limit 100
+```
+
 Create parse review reports:
 
 ```bash
@@ -240,7 +247,7 @@ Important tables:
 - `disclosure_files`: source artifact state, source URLs, storage paths, hash, size, download status.
 - `document_parse_jobs`: parser status and parse artifact paths.
 - `document_parse_texts`: searchable text cache.
-- `document_analysis_results`: reserved for downstream analysis outputs.
+- `document_analysis_results`: downstream analysis outputs, including deterministic financial facts from `tdnet analyze-financials`.
 
 `init_db()` creates missing tables but does not alter existing tables. For schema changes against an existing local Postgres volume, add explicit migrations or apply careful additive SQL.
 

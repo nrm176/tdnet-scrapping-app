@@ -8,8 +8,9 @@ facts.
 
 Issues #1 and #2 landed through PR #9.
 
-Issue #3 is being implemented in the
-`codex/company-disclosure-timeline` branch.
+Issue #3 landed through PR #10.
+
+Issue #4 is being implemented in the `codex/financial-facts-analysis` branch.
 
 ## Priority Picks
 
