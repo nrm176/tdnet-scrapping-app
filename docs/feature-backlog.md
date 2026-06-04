@@ -6,8 +6,10 @@ ingestion and review system toward a disclosure intelligence workbench with
 observable pipeline health, durable review decisions, and structured business
 facts.
 
-Issues #1 and #2 are being implemented together in the
-`codex/ixbrl-parser-quality-dashboard` branch.
+Issues #1 and #2 landed through PR #9.
+
+Issue #3 is being implemented in the
+`codex/company-disclosure-timeline` branch.
 
 ## Priority Picks
 

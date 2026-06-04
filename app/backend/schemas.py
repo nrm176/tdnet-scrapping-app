@@ -97,6 +97,54 @@ class ReportTagAssignmentResponse(BaseModel):
     source: str
 
 
+class CompanyTimelineFileResponse(BaseModel):
+    file_id: int
+    file_type: str
+    download_status: str
+    file_size_bytes: int | None
+    downloaded_at: datetime | None
+    source_url: str
+    storage_path: str
+
+
+class CompanyTimelineParserResponse(BaseModel):
+    parse_job_id: int
+    file_id: int
+    parser_name: str
+    parser_version: str
+    parse_status: str
+    parse_attempts: int = Field(ge=0)
+    parsed_at: datetime | None
+    page_count: int | None
+    char_count: int | None
+    has_text: bool
+    last_parse_error: str | None
+
+
+class CompanyTimelineDisclosureResponse(BaseModel):
+    disclosure_id: str
+    disclosure_date: date
+    time: str
+    code: str
+    company_name: str
+    title: str
+    xbrl_available: bool
+    tags: list[ReportTagAssignmentResponse] = Field(default_factory=list)
+    files: list[CompanyTimelineFileResponse] = Field(default_factory=list)
+    parsers: list[CompanyTimelineParserResponse] = Field(default_factory=list)
+    best_parse_job_id: int | None
+    snippet: str
+
+
+class CompanyTimelineResponse(BaseModel):
+    code: str
+    company_name: str | None
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
+    results: list[CompanyTimelineDisclosureResponse]
+
+
 class ParseSearchResult(BaseModel):
     parse_job_id: int
     file_id: int

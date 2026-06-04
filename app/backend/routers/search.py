@@ -4,11 +4,12 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.schemas import (
+    CompanyTimelineResponse,
     ParserOptionsResponse,
     ParserQualityResponse,
     ParseJobDetailResponse,
@@ -18,6 +19,7 @@ from app.backend.schemas import (
 )
 from app.backend.services.review_service import render_parse_job_page
 from app.backend.services.search_service import (
+    get_company_timeline,
     get_parser_quality,
     get_parse_job_detail,
     list_report_calendar_days,
@@ -102,6 +104,39 @@ async def report_calendar(
             tags=_normalize_query_tags(tags),
             tag_mode=tag_mode,
         ),
+    )
+
+
+@router.get("/companies/{code}/timeline", response_model=CompanyTimelineResponse)
+async def company_timeline(
+    code: Annotated[str, Path(min_length=1, max_length=16)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    title_q: str | None = Query(default=None, max_length=500),
+    text_q: str | None = Query(default=None, max_length=500),
+    parser_name: str | None = None,
+    parser_version: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tags: Annotated[list[str] | None, Query()] = None,
+    tag_mode: Literal["any", "all"] = "any",
+    order: Literal["asc", "desc"] = "desc",
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> CompanyTimelineResponse:
+    return await get_company_timeline(
+        session,
+        code=code,
+        title_query=title_q,
+        text_query=text_q,
+        parser_name=parser_name,
+        parser_version=parser_version,
+        date_from=date_from,
+        date_to=date_to,
+        tags=_normalize_query_tags(tags),
+        tag_mode=tag_mode,
+        order=order,
+        limit=limit,
+        offset=offset,
     )
 
 

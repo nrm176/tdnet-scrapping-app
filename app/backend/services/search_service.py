@@ -1,6 +1,7 @@
 """Database-backed search and document retrieval for parsed TDnet text."""
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date
 from typing import Literal, Sequence
 
@@ -9,6 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.backend.schemas import (
+    CompanyTimelineDisclosureResponse,
+    CompanyTimelineFileResponse,
+    CompanyTimelineParserResponse,
+    CompanyTimelineResponse,
     ParsedPageResponse,
     ParserFallbackCandidate,
     ParserOption,
@@ -235,6 +240,63 @@ def _row_to_result(
         snippet=_make_snippet(parse_text.content_text, snippet_query or query),
         tags=tags or [],
     )
+
+
+def _timeline_parse_matches(
+    parse_job: DocumentParseJobRecord,
+    parse_text: DocumentParseTextRecord | None,
+    *,
+    parser_name: str | None = None,
+    parser_version: str | None = None,
+    text_query: str | None = None,
+) -> bool:
+    if parse_job.parse_status != "completed" or parse_text is None:
+        return False
+    if parser_name and parse_job.parser_name != parser_name:
+        return False
+    if parser_version and parse_job.parser_version != parser_version:
+        return False
+    if text_query and text_query.lower() not in parse_text.content_text.lower():
+        return False
+    return True
+
+
+def _select_timeline_snippet(
+    rows: list[tuple[DocumentParseJobRecord, DocumentParseTextRecord | None]],
+    *,
+    parser_name: str | None = None,
+    parser_version: str | None = None,
+    text_query: str | None = None,
+) -> tuple[int | None, str]:
+    candidates = [
+        (parse_job, parse_text)
+        for parse_job, parse_text in rows
+        if _timeline_parse_matches(
+            parse_job,
+            parse_text,
+            parser_name=parser_name,
+            parser_version=parser_version,
+            text_query=text_query,
+        )
+    ]
+    if not candidates and not parser_name and not parser_version and not text_query:
+        candidates = [
+            (parse_job, parse_text)
+            for parse_job, parse_text in rows
+            if parse_job.parse_status == "completed" and parse_text is not None
+        ]
+    if not candidates:
+        return None, ""
+
+    candidates.sort(
+        key=lambda row: (
+            PARSER_PRIORITY.get(row[0].parser_name, 0),
+            row[0].id,
+        ),
+        reverse=True,
+    )
+    parse_job, parse_text = candidates[0]
+    return parse_job.id, _make_snippet(parse_text.content_text, text_query)
 
 
 async def list_report_tags(session: AsyncSession) -> list[ReportTagResponse]:
@@ -505,6 +567,197 @@ async def search_parse_texts(
             )
             for parse_job, parse_text, file_record, disclosure in rows
         ],
+    )
+
+
+async def get_company_timeline(
+    session: AsyncSession,
+    *,
+    code: str,
+    title_query: str | None = None,
+    text_query: str | None = None,
+    parser_name: str | None = None,
+    parser_version: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    tags: Sequence[str] | None = None,
+    tag_mode: TagMode = "any",
+    order: Literal["asc", "desc"] = "desc",
+    limit: int = 50,
+    offset: int = 0,
+) -> CompanyTimelineResponse:
+    normalized_code = code.strip().upper()
+    normalized_title_query = title_query.strip() if title_query and title_query.strip() else None
+    normalized_text_query = text_query.strip() if text_query and text_query.strip() else None
+
+    disclosure_stmt = select(DisclosureRecord).where(DisclosureRecord.code == normalized_code)
+    if date_from:
+        disclosure_stmt = disclosure_stmt.where(DisclosureRecord.disclosure_date >= date_from)
+    if date_to:
+        disclosure_stmt = disclosure_stmt.where(DisclosureRecord.disclosure_date <= date_to)
+    if normalized_title_query:
+        disclosure_stmt = disclosure_stmt.where(
+            DisclosureRecord.title.ilike(_like_pattern(normalized_title_query), escape="\\")
+        )
+    disclosure_stmt = _apply_disclosure_tag_filters(disclosure_stmt, tags=tags, tag_mode=tag_mode)
+
+    if normalized_text_query or parser_name or parser_version:
+        parse_filter = _apply_filters(
+            _base_join(),
+            title_query=normalized_title_query,
+            text_query=normalized_text_query,
+            parser_name=parser_name,
+            parser_version=parser_version,
+            code=normalized_code,
+            date_from=date_from,
+            date_to=date_to,
+            tags=tags,
+            tag_mode=tag_mode,
+        )
+        matching_disclosure_ids = parse_filter.with_only_columns(DisclosureRecord.id).distinct().subquery()
+        disclosure_stmt = disclosure_stmt.where(
+            DisclosureRecord.id.in_(select(matching_disclosure_ids.c.id))
+        )
+
+    total = int(await session.scalar(select(func.count()).select_from(disclosure_stmt.order_by(None).subquery())) or 0)
+    if order == "asc":
+        order_by = (
+            DisclosureRecord.disclosure_date.asc(),
+            DisclosureRecord.time.asc(),
+            DisclosureRecord.id.asc(),
+        )
+    else:
+        order_by = (
+            DisclosureRecord.disclosure_date.desc(),
+            DisclosureRecord.time.desc(),
+            DisclosureRecord.id.desc(),
+        )
+
+    disclosures = (
+        (await session.execute(disclosure_stmt.order_by(*order_by).limit(limit).offset(offset)))
+        .scalars()
+        .all()
+    )
+    company_name = disclosures[0].name if disclosures else await session.scalar(
+        select(DisclosureRecord.name)
+        .where(DisclosureRecord.code == normalized_code)
+        .order_by(DisclosureRecord.disclosure_date.desc(), DisclosureRecord.time.desc())
+        .limit(1)
+    )
+    if not disclosures:
+        return CompanyTimelineResponse(
+            code=normalized_code,
+            company_name=company_name,
+            total=total,
+            limit=limit,
+            offset=offset,
+            results=[],
+        )
+
+    disclosure_ids = [disclosure.id for disclosure in disclosures]
+    tag_map = await list_tag_assignments_for_disclosures(session, disclosure_ids)
+
+    file_rows = (
+        (
+            await session.execute(
+                select(DisclosureFileRecord)
+                .where(DisclosureFileRecord.disclosure_id.in_(disclosure_ids))
+                .order_by(
+                    DisclosureFileRecord.disclosure_id.asc(),
+                    DisclosureFileRecord.file_type.asc(),
+                    DisclosureFileRecord.id.asc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    files_by_disclosure: defaultdict[str, list[DisclosureFileRecord]] = defaultdict(list)
+    file_disclosure_ids: dict[int, str] = {}
+    for file_record in file_rows:
+        files_by_disclosure[file_record.disclosure_id].append(file_record)
+        file_disclosure_ids[file_record.id] = file_record.disclosure_id
+
+    parse_rows_by_disclosure: defaultdict[str, list[tuple[DocumentParseJobRecord, DocumentParseTextRecord | None]]] = (
+        defaultdict(list)
+    )
+    if file_disclosure_ids:
+        parse_rows = (
+            await session.execute(
+                select(DocumentParseJobRecord, DocumentParseTextRecord)
+                .outerjoin(DocumentParseTextRecord, DocumentParseTextRecord.parse_job_id == DocumentParseJobRecord.id)
+                .where(DocumentParseJobRecord.file_id.in_(list(file_disclosure_ids)))
+                .order_by(
+                    DocumentParseJobRecord.file_id.asc(),
+                    _parser_priority_expr(DocumentParseJobRecord).desc(),
+                    DocumentParseJobRecord.id.desc(),
+                )
+            )
+        ).all()
+        for parse_job, parse_text in parse_rows:
+            disclosure_id = file_disclosure_ids.get(parse_job.file_id)
+            if disclosure_id is not None:
+                parse_rows_by_disclosure[disclosure_id].append((parse_job, parse_text))
+
+    results: list[CompanyTimelineDisclosureResponse] = []
+    for disclosure in disclosures:
+        parse_rows = parse_rows_by_disclosure.get(disclosure.id, [])
+        best_parse_job_id, snippet = _select_timeline_snippet(
+            parse_rows,
+            parser_name=parser_name,
+            parser_version=parser_version,
+            text_query=normalized_text_query,
+        )
+        results.append(
+            CompanyTimelineDisclosureResponse(
+                disclosure_id=disclosure.id,
+                disclosure_date=disclosure.disclosure_date,
+                time=disclosure.time,
+                code=disclosure.code,
+                company_name=disclosure.name,
+                title=disclosure.title,
+                xbrl_available=disclosure.xbrl_available,
+                tags=_tag_views_to_response(tag_map.get(disclosure.id, [])),
+                files=[
+                    CompanyTimelineFileResponse(
+                        file_id=file_record.id,
+                        file_type=file_record.file_type,
+                        download_status=file_record.download_status,
+                        file_size_bytes=file_record.file_size_bytes,
+                        downloaded_at=file_record.downloaded_at,
+                        source_url=file_record.source_url,
+                        storage_path=file_record.storage_path,
+                    )
+                    for file_record in files_by_disclosure.get(disclosure.id, [])
+                ],
+                parsers=[
+                    CompanyTimelineParserResponse(
+                        parse_job_id=parse_job.id,
+                        file_id=parse_job.file_id,
+                        parser_name=parse_job.parser_name,
+                        parser_version=parse_job.parser_version,
+                        parse_status=parse_job.parse_status,
+                        parse_attempts=parse_job.parse_attempts,
+                        parsed_at=parse_job.parsed_at,
+                        page_count=parse_text.page_count if parse_text is not None else None,
+                        char_count=parse_text.char_count if parse_text is not None else None,
+                        has_text=parse_text is not None,
+                        last_parse_error=parse_job.last_parse_error,
+                    )
+                    for parse_job, parse_text in parse_rows
+                ],
+                best_parse_job_id=best_parse_job_id,
+                snippet=snippet,
+            )
+        )
+
+    return CompanyTimelineResponse(
+        code=normalized_code,
+        company_name=company_name,
+        total=total,
+        limit=limit,
+        offset=offset,
+        results=results,
     )
 
 

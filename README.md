@@ -95,9 +95,9 @@ http://127.0.0.1:5173/
 ```
 
 The backend exposes `/api/search`, `/api/parsers`, `/api/parser-quality`,
-`/api/parse-jobs/{id}`, and `/api/parse-jobs/{id}/page-image`. On Postgres it
-prepares `pg_trgm` indexes for Japanese-friendly substring search over
-`document_parse_texts.content_text`.
+`/api/companies/{code}/timeline`, `/api/parse-jobs/{id}`, and
+`/api/parse-jobs/{id}/page-image`. On Postgres it prepares `pg_trgm` indexes for
+Japanese-friendly substring search over `document_parse_texts.content_text`.
 
 ## CLI usage
 

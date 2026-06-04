@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.backend.services.search_service import (
+    get_company_timeline,
     get_parse_job_detail,
     get_parser_quality,
     list_parser_options,
@@ -153,6 +154,158 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
     assert detail.tags[0].slug == "forecast_revision"
     assert detail.pages[0].page == 1
     assert detail.content_text == text
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_company_timeline_includes_lineage_and_filters(tmp_path):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        disclosures = [
+            TdnetDisclosure(
+                time="15:30",
+                code="85600",
+                name="宮崎太銀",
+                title="業績予想の修正に関するお知らせ",
+                pdf_url="https://www.release.tdnet.info/inbs/140120260414503449.pdf",
+                xbrl_available=False,
+                place="福",
+                history="",
+                disclosure_date=date(2026, 4, 20),
+            ),
+            TdnetDisclosure(
+                time="12:00",
+                code="85600",
+                name="宮崎太銀",
+                title="決算短信に関するお知らせ",
+                pdf_url="https://www.release.tdnet.info/inbs/140120260421503450.pdf",
+                xbrl_available=True,
+                xbrl_url="https://www.release.tdnet.info/inbs/081220260421503450.zip",
+                place="福",
+                history="",
+                disclosure_date=date(2026, 4, 21),
+            ),
+        ]
+        await upsert_disclosures(session, disclosures)
+
+        parsed_disclosure = await session.get(DisclosureRecord, disclosures[0].id)
+        unparsed_disclosure = await session.get(DisclosureRecord, disclosures[1].id)
+        assert parsed_disclosure is not None
+        assert unparsed_disclosure is not None
+
+        parsed_pdf_path = tmp_path / "140120260414503449.pdf"
+        parsed_pdf_path.write_bytes(b"%PDF-1.7\n")
+        parsed_file = await get_or_create_disclosure_file(
+            session,
+            disclosure=parsed_disclosure,
+            file_type="pdf",
+            source_url=str(disclosures[0].pdf_url),
+            source_file_id="140120260414503449",
+            storage_bucket="tdnet-forecast-correction",
+            storage_path=str(parsed_pdf_path),
+        )
+        await complete_disclosure_file(
+            session,
+            parsed_file,
+            file_size_bytes=10,
+            sha256="a" * 64,
+            content_type="application/pdf",
+        )
+        parse_job = DocumentParseJobRecord(
+            file_id=parsed_file.id,
+            parser_name="apple-vision-ocr",
+            parser_version="ocr-version",
+            parse_status="completed",
+            text_path=str(tmp_path / "parsed.md"),
+            text_sha256="b" * 64,
+        )
+        session.add(parse_job)
+        await session.commit()
+        await session.refresh(parse_job)
+        text = "業績予想の修正に関するお知らせ\n今回修正予想 18,000 2,580\n"
+        await upsert_parse_text(
+            session,
+            parse_job=parse_job,
+            content_text=text,
+            pages_json={"pages": [{"page": 1, "markdown": text, "char_count": len(text)}]},
+            page_count=1,
+            char_count=len(text),
+            content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        )
+
+        pending_pdf_path = tmp_path / "140120260421503450.pdf"
+        pending_file = await get_or_create_disclosure_file(
+            session,
+            disclosure=unparsed_disclosure,
+            file_type="pdf",
+            source_url=str(disclosures[1].pdf_url),
+            source_file_id="140120260421503450",
+            storage_bucket="tdnet",
+            storage_path=str(pending_pdf_path),
+        )
+        failed_job = DocumentParseJobRecord(
+            file_id=pending_file.id,
+            parser_name=PARSER_NAME,
+            parser_version="source-version",
+            parse_status="failed",
+            parse_attempts=1,
+            last_parse_error="layout failed",
+        )
+        session.add(failed_job)
+        await session.commit()
+        await tag_reports(
+            session,
+            parser_name="apple-vision-ocr",
+            parser_version="ocr-version",
+            limit=10,
+        )
+
+        timeline = await get_company_timeline(session, code="85600")
+        text_filtered = await get_company_timeline(
+            session,
+            code="85600",
+            text_query="18,000",
+            parser_name="apple-vision-ocr",
+        )
+        date_filtered = await get_company_timeline(
+            session,
+            code="85600",
+            date_from=date(2026, 4, 21),
+        )
+        tag_filtered = await get_company_timeline(
+            session,
+            code="85600",
+            tags=["forecast_revision"],
+        )
+
+    assert timeline.code == "85600"
+    assert timeline.company_name == "宮崎太銀"
+    assert timeline.total == 2
+    assert [item.disclosure_date for item in timeline.results] == [date(2026, 4, 21), date(2026, 4, 20)]
+
+    parsed_item = next(item for item in timeline.results if item.best_parse_job_id == parse_job.id)
+    assert parsed_item.files[0].download_status == "completed"
+    assert parsed_item.parsers[0].parser_name == "apple-vision-ocr"
+    assert parsed_item.parsers[0].has_text is True
+    assert parsed_item.tags[0].slug == "forecast_revision"
+    assert "18,000" in parsed_item.snippet
+
+    unparsed_item = next(item for item in timeline.results if item.disclosure_id == disclosures[1].id)
+    assert unparsed_item.files[0].download_status == "pending"
+    assert unparsed_item.parsers[0].parse_status == "failed"
+    assert unparsed_item.parsers[0].last_parse_error == "layout failed"
+    assert unparsed_item.best_parse_job_id is None
+
+    assert text_filtered.total == 1
+    assert text_filtered.results[0].disclosure_id == disclosures[0].id
+    assert date_filtered.total == 1
+    assert date_filtered.results[0].disclosure_id == disclosures[1].id
+    assert tag_filtered.total == 1
+    assert tag_filtered.results[0].disclosure_id == disclosures[0].id
     await engine.dispose()
 
 

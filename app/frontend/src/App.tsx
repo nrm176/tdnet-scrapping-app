@@ -2,6 +2,7 @@ import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from
 import {
   Activity,
   AlertTriangle,
+  Building2,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -13,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  fetchCompanyTimeline,
   fetchParseJob,
   fetchParsers,
   fetchParserQuality,
@@ -23,6 +25,8 @@ import {
   searchParseTexts,
 } from "./api";
 import type {
+  CompanyTimelineDisclosure,
+  CompanyTimelineResponse,
   ParseJobDetail,
   ParseSearchResult,
   ParserOption,
@@ -89,6 +93,33 @@ function compactVersion(value: string): string {
   return value.length > 28 ? `${value.slice(0, 25)}...` : value;
 }
 
+function normalizeCompanyCode(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function summarizeTimelineFiles(item: CompanyTimelineDisclosure): string {
+  if (!item.files.length) {
+    return "No files";
+  }
+  return item.files.map((file) => `${file.file_type}:${file.download_status}`).join(" · ");
+}
+
+function summarizeTimelineParsers(item: CompanyTimelineDisclosure): string {
+  if (!item.parsers.length) {
+    return "No parser jobs";
+  }
+  const completed = item.parsers.filter((parser) => parser.parse_status === "completed").length;
+  const failed = item.parsers.filter((parser) => parser.parse_status === "failed").length;
+  const textRows = item.parsers.filter((parser) => parser.has_text).length;
+  return [
+    completed ? `${formatNumber(completed)} completed` : "",
+    failed ? `${formatNumber(failed)} failed` : "",
+    textRows ? `${formatNumber(textRows)} text` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ") || `${formatNumber(item.parsers.length)} parser jobs`;
+}
+
 function formatDateKey(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -145,6 +176,8 @@ function App() {
   const [tagMode, setTagMode] = useState<"any" | "all">("any");
   const [calendarMonth, setCalendarMonth] = useState(currentMonthKey());
   const [calendarDays, setCalendarDays] = useState<ReportCalendarDay[]>([]);
+  const [timelineCode, setTimelineCode] = useState("");
+  const [timeline, setTimeline] = useState<CompanyTimelineResponse | null>(null);
   const [results, setResults] = useState<ParseSearchResult[]>([]);
   const [total, setTotal] = useState(0);
   const [appliedCriteria, setAppliedCriteria] = useState<SearchCriteria>(EMPTY_CRITERIA);
@@ -155,11 +188,16 @@ function App() {
   const [initialResultsLoaded, setInitialResultsLoaded] = useState(false);
   const [qualityLoading, setQualityLoading] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [timelineLoading, setTimelineLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selectedPage = detail?.pages[pageIndex] ?? detail?.pages[0] ?? null;
   const visibleText = selectedPage?.markdown || detail?.content_text || "";
+  const activeTimelineCode = useMemo(
+    () => normalizeCompanyCode(timelineCode || appliedCriteria.code || detail?.code || results[0]?.code || ""),
+    [timelineCode, appliedCriteria.code, detail?.code, results],
+  );
   const calendarCells = useMemo(() => buildCalendarCells(calendarMonth), [calendarMonth]);
   const calendarRecordCounts = useMemo(
     () => new Map(calendarDays.map((day) => [day.disclosure_date, day.record_count])),
@@ -313,6 +351,36 @@ function App() {
     }
   }
 
+  async function loadCompanyTimeline(nextCode = activeTimelineCode) {
+    const normalizedCode = normalizeCompanyCode(nextCode);
+    if (!normalizedCode) {
+      setTimeline(null);
+      return;
+    }
+
+    setTimelineLoading(true);
+    const selection = parseParserKey(appliedCriteria.parserValue);
+    try {
+      const response = await fetchCompanyTimeline({
+        code: normalizedCode,
+        titleQuery: appliedCriteria.titleQuery,
+        textQuery: appliedCriteria.textQuery,
+        dateFrom: appliedCriteria.dateFrom,
+        dateTo: appliedCriteria.dateTo,
+        tags: appliedCriteria.tags,
+        tagMode: appliedCriteria.tagMode,
+        ...selection,
+        limit: 50,
+      });
+      setError(null);
+      setTimeline(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load company timeline");
+    } finally {
+      setTimelineLoading(false);
+    }
+  }
+
   async function runSearch(event?: FormEvent, overrides: SearchCriteriaOverrides = {}) {
     event?.preventDefault();
     setLoading(true);
@@ -391,6 +459,10 @@ function App() {
     );
   }
 
+  function openCompanyTimeline(nextCode: string) {
+    setTimelineCode(normalizeCompanyCode(nextCode));
+  }
+
   useEffect(() => {
     loadParsers().catch((err) => setError(err instanceof Error ? err.message : "Failed to load parsers"));
     loadParserQuality().catch((err) => setError(err instanceof Error ? err.message : "Failed to load parser quality"));
@@ -409,6 +481,16 @@ function App() {
       loadCalendar().catch((err) => setError(err instanceof Error ? err.message : "Failed to load calendar"));
     }
   }, [calendarMonth, parsers.length, appliedCriteria]);
+
+  useEffect(() => {
+    if (!activeTimelineCode) {
+      setTimeline(null);
+      return;
+    }
+    loadCompanyTimeline(activeTimelineCode).catch((err) =>
+      setError(err instanceof Error ? err.message : "Failed to load company timeline"),
+    );
+  }, [activeTimelineCode, appliedCriteria]);
 
   useEffect(() => {
     const activeDate = dateFrom || dateTo;
@@ -680,6 +762,80 @@ function App() {
               })}
             </div>
           </section>
+          <section className="timeline-panel" aria-label="Company timeline">
+            <div className="timeline-header">
+              <div className="timeline-title">
+                <Building2 size={16} />
+                <strong>{activeTimelineCode || "Company"}</strong>
+                <span>
+                  {timelineLoading
+                    ? "Loading"
+                    : timeline
+                      ? `${timeline.company_name ?? "Unknown"} · ${formatNumber(timeline.total)} disclosures`
+                      : "No company selected"}
+                </span>
+              </div>
+              <button
+                className="square-button"
+                type="button"
+                title="Refresh company timeline"
+                disabled={!activeTimelineCode}
+                onClick={() => loadCompanyTimeline()}
+              >
+                <RefreshCw size={16} />
+              </button>
+            </div>
+            <div className="timeline-list">
+              {timeline?.results.map((item) => {
+                const canOpenParse = item.best_parse_job_id !== null;
+                return (
+                  <button
+                    key={item.disclosure_id}
+                    className={`timeline-row ${item.best_parse_job_id === selectedId ? "selected" : ""}`}
+                    type="button"
+                    title={canOpenParse ? "Open best parse for this disclosure" : "No parsed text available"}
+                    disabled={!canOpenParse}
+                    onClick={() => {
+                      if (item.best_parse_job_id !== null) {
+                        setSelectedId(item.best_parse_job_id);
+                      }
+                    }}
+                  >
+                    <div className="timeline-row-main">
+                      <span className="date">{item.disclosure_date}</span>
+                      <span className="time">{item.time}</span>
+                      <span className="timeline-row-title">{item.title}</span>
+                    </div>
+                    {item.tags.length ? (
+                      <div className="tag-chip-list timeline-tags">
+                        {item.tags.slice(0, 3).map((tag) => (
+                          <span
+                            key={tag.slug}
+                            className={`tag-chip ${tag.is_primary ? "primary" : ""}`}
+                            title={`${tag.label_en} · ${tag.source}`}
+                          >
+                            {tag.label_ja}
+                          </span>
+                        ))}
+                        {item.tags.length > 3 ? (
+                          <span className="tag-chip">+{formatNumber(item.tags.length - 3)}</span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="timeline-row-meta">
+                      <span>{summarizeTimelineFiles(item)}</span>
+                      <span>{summarizeTimelineParsers(item)}</span>
+                    </div>
+                    {item.snippet ? <div className="timeline-snippet">{item.snippet}</div> : null}
+                  </button>
+                );
+              })}
+              {!timelineLoading && timeline && !timeline.results.length ? (
+                <div className="timeline-empty">No disclosures matched.</div>
+              ) : null}
+              {!timelineLoading && !timeline ? <div className="timeline-empty">Select a company code.</div> : null}
+            </div>
+          </section>
           <div className="pane-header">
             <div className="match-summary">
               <strong>{loading ? "Loading..." : `${formatNumber(total)} matches`}</strong>
@@ -730,6 +886,18 @@ function App() {
                   <span>{result.parser_name}</span>
                   <span>{result.page_count}p</span>
                   <span>{formatNumber(result.char_count)} chars</span>
+                  <button
+                    className="timeline-link-button"
+                    type="button"
+                    title={`Open timeline for ${result.code}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openCompanyTimeline(result.code);
+                    }}
+                  >
+                    <Building2 size={13} />
+                    <span>Timeline</span>
+                  </button>
                 </div>
               </div>
             ))}
@@ -771,10 +939,21 @@ function App() {
                     </div>
                   ) : null}
                 </div>
-                <a className="icon-button link-button" href={detail.source_url} target="_blank" rel="noreferrer">
-                  <ExternalLink size={17} />
-                  <span>TDnet PDF</span>
-                </a>
+                <div className="document-actions">
+                  <button
+                    className="icon-button"
+                    type="button"
+                    title={`Open timeline for ${detail.code}`}
+                    onClick={() => openCompanyTimeline(detail.code)}
+                  >
+                    <Building2 size={17} />
+                    <span>Timeline</span>
+                  </button>
+                  <a className="icon-button link-button" href={detail.source_url} target="_blank" rel="noreferrer">
+                    <ExternalLink size={17} />
+                    <span>TDnet PDF</span>
+                  </a>
+                </div>
               </div>
 
               <div className="page-toolbar">
