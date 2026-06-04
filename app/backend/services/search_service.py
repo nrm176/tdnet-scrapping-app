@@ -10,8 +10,12 @@ from sqlalchemy.orm import aliased
 
 from app.backend.schemas import (
     ParsedPageResponse,
+    ParserFallbackCandidate,
     ParserOption,
     ParseJobDetailResponse,
+    ParserQualityParser,
+    ParserQualityResponse,
+    ParserRecentError,
     ParseSearchResult,
     ParseSearchResponse,
     ReportTagAssignmentResponse,
@@ -30,9 +34,9 @@ from tdnet.orm import (
     DocumentParseJobRecord,
     DocumentParseTextRecord,
 )
-from tdnet.ixbrl_text import IXBRL_TEXT_PARSER_NAME
-from tdnet.ocr import APPLE_VISION_OCR_NAME
-from tdnet.parsers import PARSER_NAME
+from tdnet.ixbrl_text import IXBRL_TEXT_PARSER_NAME, get_ixbrl_text_parser_version
+from tdnet.ocr import APPLE_VISION_OCR_NAME, get_apple_vision_parser_version
+from tdnet.parsers import PARSER_NAME, get_parser_version
 
 TagMode = Literal["any", "all"]
 PARSER_PRIORITY = {
@@ -40,6 +44,7 @@ PARSER_PRIORITY = {
     APPLE_VISION_OCR_NAME: 20,
     PARSER_NAME: 10,
 }
+LOW_TEXT_CHAR_THRESHOLD = 300
 
 
 def _escape_like(value: str) -> str:
@@ -272,6 +277,168 @@ async def list_parser_options(session: AsyncSession) -> list[ParserOption]:
         )
         for parser_name, parser_version, parse_jobs, parse_texts in rows
     ]
+
+
+def _sum_when(condition) -> object:
+    return func.sum(case((condition, 1), else_=0))
+
+
+async def _count_ocr_low_text_candidates(session: AsyncSession) -> int:
+    source_job = aliased(DocumentParseJobRecord)
+    source_text = aliased(DocumentParseTextRecord)
+    completed_ocr_job = aliased(DocumentParseJobRecord)
+    source_version = get_parser_version()
+    ocr_version = get_apple_vision_parser_version()
+    stmt = (
+        select(func.count(distinct(source_job.id)))
+        .join(DisclosureFileRecord, source_job.file_id == DisclosureFileRecord.id)
+        .join(source_text, source_text.parse_job_id == source_job.id)
+        .outerjoin(
+            completed_ocr_job,
+            and_(
+                completed_ocr_job.file_id == source_job.file_id,
+                completed_ocr_job.parser_name == APPLE_VISION_OCR_NAME,
+                completed_ocr_job.parser_version == ocr_version,
+                completed_ocr_job.parse_status == "completed",
+            ),
+        )
+        .where(DisclosureFileRecord.file_type == "pdf")
+        .where(DisclosureFileRecord.download_status == "completed")
+        .where(source_job.parser_name == PARSER_NAME)
+        .where(source_job.parser_version == source_version)
+        .where(source_job.parse_status == "completed")
+        .where(source_text.char_count < LOW_TEXT_CHAR_THRESHOLD)
+        .where(completed_ocr_job.id.is_(None))
+    )
+    return int(await session.scalar(stmt) or 0)
+
+
+async def _count_ixbrl_sidecar_candidates(session: AsyncSession) -> int:
+    pdf_file = aliased(DisclosureFileRecord)
+    xbrl_file = aliased(DisclosureFileRecord)
+    completed_ixbrl_job = aliased(DocumentParseJobRecord)
+    ixbrl_version = get_ixbrl_text_parser_version()
+    stmt = (
+        select(func.count(distinct(pdf_file.id)))
+        .join(DisclosureRecord, pdf_file.disclosure_id == DisclosureRecord.id)
+        .join(
+            xbrl_file,
+            and_(
+                xbrl_file.disclosure_id == DisclosureRecord.id,
+                xbrl_file.file_type == "xbrl",
+                xbrl_file.download_status == "completed",
+            ),
+        )
+        .outerjoin(
+            completed_ixbrl_job,
+            and_(
+                completed_ixbrl_job.file_id == pdf_file.id,
+                completed_ixbrl_job.parser_name == IXBRL_TEXT_PARSER_NAME,
+                completed_ixbrl_job.parser_version == ixbrl_version,
+                completed_ixbrl_job.parse_status == "completed",
+            ),
+        )
+        .where(pdf_file.file_type == "pdf")
+        .where(pdf_file.download_status == "completed")
+        .where(completed_ixbrl_job.id.is_(None))
+    )
+    return int(await session.scalar(stmt) or 0)
+
+
+async def get_parser_quality(session: AsyncSession) -> ParserQualityResponse:
+    parser_rows = (
+        await session.execute(
+            select(
+                DocumentParseJobRecord.parser_name,
+                DocumentParseJobRecord.parser_version,
+                func.count(DocumentParseJobRecord.id),
+                _sum_when(DocumentParseJobRecord.parse_status == "completed"),
+                _sum_when(DocumentParseJobRecord.parse_status == "failed"),
+                _sum_when(~DocumentParseJobRecord.parse_status.in_(["completed", "failed"])),
+                func.count(DocumentParseTextRecord.id),
+                _sum_when(DocumentParseTextRecord.char_count < LOW_TEXT_CHAR_THRESHOLD),
+                func.avg(DocumentParseTextRecord.char_count),
+            )
+            .outerjoin(DocumentParseTextRecord, DocumentParseTextRecord.parse_job_id == DocumentParseJobRecord.id)
+            .group_by(DocumentParseJobRecord.parser_name, DocumentParseJobRecord.parser_version)
+            .order_by(DocumentParseJobRecord.parser_name.asc(), DocumentParseJobRecord.parser_version.desc())
+        )
+    ).all()
+    parsers = [
+        ParserQualityParser(
+            parser_name=parser_name,
+            parser_version=parser_version,
+            total_jobs=int(total_jobs or 0),
+            completed_jobs=int(completed_jobs or 0),
+            failed_jobs=int(failed_jobs or 0),
+            pending_jobs=int(pending_jobs or 0),
+            parse_texts=int(parse_texts or 0),
+            low_text_jobs=int(low_text_jobs or 0),
+            average_char_count=float(average_char_count) if average_char_count is not None else None,
+        )
+        for (
+            parser_name,
+            parser_version,
+            total_jobs,
+            completed_jobs,
+            failed_jobs,
+            pending_jobs,
+            parse_texts,
+            low_text_jobs,
+            average_char_count,
+        ) in parser_rows
+    ]
+    error_rows = (
+        await session.execute(
+            select(
+                DocumentParseJobRecord.id,
+                DocumentParseJobRecord.file_id,
+                DocumentParseJobRecord.parser_name,
+                DocumentParseJobRecord.parser_version,
+                DocumentParseJobRecord.last_parse_error,
+                DocumentParseJobRecord.updated_at,
+            )
+            .where(DocumentParseJobRecord.parse_status == "failed")
+            .where(DocumentParseJobRecord.last_parse_error.is_not(None))
+            .order_by(DocumentParseJobRecord.updated_at.desc(), DocumentParseJobRecord.id.desc())
+            .limit(5)
+        )
+    ).all()
+    return ParserQualityResponse(
+        total_jobs=sum(parser.total_jobs for parser in parsers),
+        completed_jobs=sum(parser.completed_jobs for parser in parsers),
+        failed_jobs=sum(parser.failed_jobs for parser in parsers),
+        parse_texts=sum(parser.parse_texts for parser in parsers),
+        low_text_jobs=sum(parser.low_text_jobs for parser in parsers),
+        fallback_candidates=[
+            ParserFallbackCandidate(
+                name="Low-text PDF OCR",
+                parser_name=APPLE_VISION_OCR_NAME,
+                parser_version=get_apple_vision_parser_version(),
+                candidate_count=await _count_ocr_low_text_candidates(session),
+                description="Completed current PyMuPDF PDF parses below 300 characters without current OCR output.",
+            ),
+            ParserFallbackCandidate(
+                name="PDF/XBRL sidecar text",
+                parser_name=IXBRL_TEXT_PARSER_NAME,
+                parser_version=get_ixbrl_text_parser_version(),
+                candidate_count=await _count_ixbrl_sidecar_candidates(session),
+                description="Completed PDF/XBRL pairs without current iXBRL text output.",
+            ),
+        ],
+        parsers=parsers,
+        recent_errors=[
+            ParserRecentError(
+                parse_job_id=parse_job_id,
+                file_id=file_id,
+                parser_name=parser_name,
+                parser_version=parser_version,
+                error=str(error or ""),
+                updated_at=updated_at,
+            )
+            for parse_job_id, file_id, parser_name, parser_version, error, updated_at in error_rows
+        ],
+    )
 
 
 async def search_parse_texts(

@@ -50,6 +50,7 @@ flowchart LR
 
   subgraph api["Review FastAPI backend"]
     searchApi["/api/search<br/>title, full text, tags, date, code"]
+    parserQualityApi["/api/parser-quality<br/>parser coverage + fallback candidates"]
     calendarApi["/api/calendar<br/>filtered monthly counts"]
     detailApi["/api/parse-jobs/{id}<br/>detail + parsed pages"]
     imageApi["/api/parse-jobs/{id}/page-image<br/>source PDF render"]
@@ -57,6 +58,9 @@ flowchart LR
   end
 
   parseTexts --> searchApi
+  parseJobs --> parserQualityApi
+  parseTexts --> parserQualityApi
+  disclosureFiles --> parserQualityApi
   tdnetDisclosures --> searchApi
   tagAssignments --> searchApi
   tdnetDisclosures --> calendarApi
@@ -69,12 +73,14 @@ flowchart LR
 
   subgraph ui["React review workbench"]
     criteria["Search criteria<br/>title, full text, tags, parser, date, code"]
+    quality["Parser quality dashboard<br/>coverage, failures, fallback candidates"]
     results["Scrollable matched records<br/>tag chips + metadata"]
     detail["PDF image + parsed text detail"]
     calendar["Calendar counts"]
   end
 
   criteria --> searchApi
+  quality --> parserQualityApi
   criteria --> calendarApi
   criteria --> tagsApi
   searchApi --> results
@@ -94,8 +100,8 @@ flowchart LR
   class tdnet source
   class scrape,disclosures,download,parse,persistText,tagger job
   class tdnetDisclosures,disclosureFiles,parseJobs,parseTexts,tagDefs,tagAssignments,analysisResults,sourceFiles,parsedFiles,pageImages store
-  class searchApi,calendarApi,detailApi,imageApi,tagsApi api
-  class criteria,results,detail,calendar ui
+  class searchApi,parserQualityApi,calendarApi,detailApi,imageApi,tagsApi api
+  class criteria,quality,results,detail,calendar ui
 ```
 
 ## Persistence Notes

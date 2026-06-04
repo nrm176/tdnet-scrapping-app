@@ -5,6 +5,46 @@ export type ParserOption = {
   parse_texts: number;
 };
 
+export type ParserQualityParser = {
+  parser_name: string;
+  parser_version: string;
+  total_jobs: number;
+  completed_jobs: number;
+  failed_jobs: number;
+  pending_jobs: number;
+  parse_texts: number;
+  low_text_jobs: number;
+  average_char_count: number | null;
+};
+
+export type ParserFallbackCandidate = {
+  name: string;
+  parser_name: string;
+  parser_version: string;
+  candidate_count: number;
+  description: string;
+};
+
+export type ParserRecentError = {
+  parse_job_id: number;
+  file_id: number;
+  parser_name: string;
+  parser_version: string;
+  error: string;
+  updated_at: string;
+};
+
+export type ParserQuality = {
+  total_jobs: number;
+  completed_jobs: number;
+  failed_jobs: number;
+  parse_texts: number;
+  low_text_jobs: number;
+  fallback_candidates: ParserFallbackCandidate[];
+  parsers: ParserQualityParser[];
+  recent_errors: ParserRecentError[];
+};
+
 export type ReportCalendarDay = {
   disclosure_date: string;
   record_count: number;

@@ -1,4 +1,11 @@
-import type { ParseJobDetail, ParseSearchResponse, ParserOption, ReportCalendarResponse, ReportTag } from "./types";
+import type {
+  ParseJobDetail,
+  ParseSearchResponse,
+  ParserOption,
+  ParserQuality,
+  ReportCalendarResponse,
+  ReportTag,
+} from "./types";
 
 type SearchParams = {
   q?: string;
@@ -63,6 +70,10 @@ function appendOptionalList(params: URLSearchParams, key: string, values: string
 export async function fetchParsers(): Promise<ParserOption[]> {
   const response = await requestJson<{ parsers: ParserOption[] }>("/api/parsers");
   return response.parsers;
+}
+
+export async function fetchParserQuality(): Promise<ParserQuality> {
+  return requestJson<ParserQuality>("/api/parser-quality");
 }
 
 export async function fetchTags(): Promise<ReportTag[]> {

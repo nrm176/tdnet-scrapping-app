@@ -16,6 +16,9 @@ TAG_LIMIT="20000"
 WITH_OCR="false"
 OCR_LIMIT="100"
 OCR_WORKERS="4"
+WITH_IXBRL="false"
+IXBRL_LIMIT="100"
+IXBRL_STRATEGY="garbled"
 WITH_REVIEW="false"
 REVIEW_LIMIT="50"
 REVIEW_STRATEGY="suspicious"
@@ -67,6 +70,9 @@ Pipeline options:
   --with-ocr               Also run Apple Vision OCR for sparse parses
   --ocr-limit N            OCR candidate limit. Default: 100
   --ocr-workers N          OCR workers. Default: 4
+  --with-ixbrl             Also extract text from downloaded iXBRL ZIP sidecars
+  --ixbrl-limit N          iXBRL candidate limit. Default: 100
+  --ixbrl-strategy NAME    garbled|forecast-correction|all. Default: garbled
   --with-review            Generate a parse review report
   --review-limit N         Review report document limit. Default: 50
   --review-strategy NAME   suspicious|random|recent|forecast-correction. Default: suspicious
@@ -104,6 +110,9 @@ while [[ $# -gt 0 ]]; do
     --with-ocr) WITH_OCR="true"; shift ;;
     --ocr-limit) OCR_LIMIT="$2"; shift 2 ;;
     --ocr-workers) OCR_WORKERS="$2"; shift 2 ;;
+    --with-ixbrl) WITH_IXBRL="true"; shift ;;
+    --ixbrl-limit) IXBRL_LIMIT="$2"; shift 2 ;;
+    --ixbrl-strategy) IXBRL_STRATEGY="$2"; shift 2 ;;
     --with-review) WITH_REVIEW="true"; shift ;;
     --review-limit) REVIEW_LIMIT="$2"; shift 2 ;;
     --review-strategy) REVIEW_STRATEGY="$2"; shift 2 ;;
@@ -255,8 +264,9 @@ log "TDnet all-in-one pipeline started run_id=${RUN_ID}"
 log "Pipeline log: ${PIPELINE_LOG}"
 log "Latest log: ${LATEST_LOG}"
 log "Repository root: ${REPO_ROOT}"
-log "Options: days=${DAYS} start_date=${START_DATE:-auto} end_date=${END_DATE:-auto} force_scrape=${FORCE_SCRAPE} scrape_lookback_days=${SCRAPE_LOOKBACK_DAYS} retry_failed=${RETRY_FAILED} retag=${RETAG} with_ocr=${WITH_OCR} with_review=${WITH_REVIEW} dry_run=${DRY_RUN}"
-log "Limits: download=${DOWNLOAD_LIMIT} parse=${PARSE_LIMIT} parse_text=${PARSE_TEXT_LIMIT} tag=${TAG_LIMIT} ocr=${OCR_LIMIT} review=${REVIEW_LIMIT}"
+log "Options: days=${DAYS} start_date=${START_DATE:-auto} end_date=${END_DATE:-auto} force_scrape=${FORCE_SCRAPE} scrape_lookback_days=${SCRAPE_LOOKBACK_DAYS} retry_failed=${RETRY_FAILED} retag=${RETAG} with_ocr=${WITH_OCR} with_ixbrl=${WITH_IXBRL} with_review=${WITH_REVIEW} dry_run=${DRY_RUN}"
+log "Limits: download=${DOWNLOAD_LIMIT} parse=${PARSE_LIMIT} parse_text=${PARSE_TEXT_LIMIT} tag=${TAG_LIMIT} ocr=${OCR_LIMIT} ixbrl=${IXBRL_LIMIT} review=${REVIEW_LIMIT}"
+log "Strategies: ixbrl=${IXBRL_STRATEGY} review=${REVIEW_STRATEGY}"
 log "Skip flags: install=${SKIP_INSTALL} postgres=${SKIP_POSTGRES} scrape=${SKIP_SCRAPE} download=${SKIP_DOWNLOAD} parse=${SKIP_PARSE} parse_text=${SKIP_PARSE_TEXT} tag=${SKIP_TAG}"
 
 if [[ "${SKIP_POSTGRES}" != "true" ]]; then
@@ -451,6 +461,18 @@ if [[ "${WITH_OCR}" == "true" ]]; then
   finish_step
 else
   skip_step "ocr" "not requested"
+fi
+
+if [[ "${WITH_IXBRL}" == "true" ]]; then
+  start_step "parse-ixbrl"
+  IXBRL_ARGS=(parse-ixbrl --strategy "${IXBRL_STRATEGY}" --limit "${IXBRL_LIMIT}")
+  if [[ "${RETRY_FAILED}" == "true" ]]; then
+    IXBRL_ARGS+=(--retry-failed)
+  fi
+  run "${TDNET}" "${IXBRL_ARGS[@]}"
+  finish_step
+else
+  skip_step "parse-ixbrl" "not requested"
 fi
 
 if [[ "${SKIP_TAG}" != "true" ]]; then

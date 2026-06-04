@@ -22,6 +22,46 @@ class ParserOptionsResponse(BaseModel):
     parsers: list[ParserOption]
 
 
+class ParserQualityParser(BaseModel):
+    parser_name: str
+    parser_version: str
+    total_jobs: int = Field(ge=0)
+    completed_jobs: int = Field(ge=0)
+    failed_jobs: int = Field(ge=0)
+    pending_jobs: int = Field(ge=0)
+    parse_texts: int = Field(ge=0)
+    low_text_jobs: int = Field(ge=0)
+    average_char_count: float | None
+
+
+class ParserFallbackCandidate(BaseModel):
+    name: str
+    parser_name: str
+    parser_version: str
+    candidate_count: int = Field(ge=0)
+    description: str
+
+
+class ParserRecentError(BaseModel):
+    parse_job_id: int
+    file_id: int
+    parser_name: str
+    parser_version: str
+    error: str
+    updated_at: datetime
+
+
+class ParserQualityResponse(BaseModel):
+    total_jobs: int = Field(ge=0)
+    completed_jobs: int = Field(ge=0)
+    failed_jobs: int = Field(ge=0)
+    parse_texts: int = Field(ge=0)
+    low_text_jobs: int = Field(ge=0)
+    fallback_candidates: list[ParserFallbackCandidate]
+    parsers: list[ParserQualityParser]
+    recent_errors: list[ParserRecentError]
+
+
 class ReportCalendarDay(BaseModel):
     disclosure_date: date
     record_count: int = Field(ge=0)

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.backend.schemas import (
     ParserOptionsResponse,
+    ParserQualityResponse,
     ParseJobDetailResponse,
     ParseSearchResponse,
     ReportCalendarResponse,
@@ -17,6 +18,7 @@ from app.backend.schemas import (
 )
 from app.backend.services.review_service import render_parse_job_page
 from app.backend.services.search_service import (
+    get_parser_quality,
     get_parse_job_detail,
     list_report_calendar_days,
     list_report_tags,
@@ -59,6 +61,11 @@ def _normalize_query_tags(tags: list[str] | None) -> list[str]:
 @router.get("/parsers", response_model=ParserOptionsResponse)
 async def parsers(session: Annotated[AsyncSession, Depends(get_session)]) -> ParserOptionsResponse:
     return ParserOptionsResponse(parsers=await list_parser_options(session))
+
+
+@router.get("/parser-quality", response_model=ParserQualityResponse)
+async def parser_quality(session: Annotated[AsyncSession, Depends(get_session)]) -> ParserQualityResponse:
+    return await get_parser_quality(session)
 
 
 @router.get("/tags", response_model=ReportTagsResponse)
