@@ -14,7 +14,9 @@ from app.backend.services.search_service import (
     search_parse_texts,
 )
 from tdnet.models import TdnetDisclosure
+from tdnet.ixbrl_text import IXBRL_TEXT_PARSER_NAME
 from tdnet.orm import Base, DisclosureRecord, DocumentParseJobRecord
+from tdnet.parsers import PARSER_NAME
 from tdnet.repository import complete_disclosure_file, get_or_create_disclosure_file, upsert_disclosures, upsert_parse_text
 from tdnet.tagging import tag_reports
 
@@ -149,4 +151,89 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
     assert detail.tags[0].slug == "forecast_revision"
     assert detail.pages[0].page == 1
     assert detail.content_text == text
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_search_parse_texts_prefers_best_parser_by_default(tmp_path):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with session_factory() as session:
+        disclosure = TdnetDisclosure(
+            time="14:30",
+            code="40260",
+            name="神島化学工業",
+            title="通期業績予想の修正に関するお知らせ",
+            pdf_url="https://www.release.tdnet.info/inbs/140120260601558048.pdf",
+            xbrl_available=True,
+            xbrl_url="https://www.release.tdnet.info/inbs/091220260601558048.zip",
+            place="東",
+            history="",
+            disclosure_date=date(2026, 6, 3),
+        )
+        await upsert_disclosures(session, [disclosure])
+        disclosure_record = await session.get(DisclosureRecord, disclosure.id)
+        assert disclosure_record is not None
+        pdf_path = tmp_path / "140120260601558048.pdf"
+        pdf_path.write_bytes(b"%PDF-1.7\n")
+        file_record = await get_or_create_disclosure_file(
+            session,
+            disclosure=disclosure_record,
+            file_type="pdf",
+            source_url=str(disclosure.pdf_url),
+            source_file_id="140120260601558048",
+            storage_bucket="tdnet-forecast-correction",
+            storage_path=str(pdf_path),
+        )
+        await complete_disclosure_file(
+            session,
+            file_record,
+            file_size_bytes=10,
+            sha256="a" * 64,
+            content_type="application/pdf",
+        )
+
+        for parser_name, parser_version, text in [
+            (PARSER_NAME, "source-version", "garbled-token \x01\x02\x03J®XG}uvªLMc\x89§\x9a\n"),
+            (IXBRL_TEXT_PARSER_NAME, "ixbrl-version", "通期業績予想の修正に関するお知らせ\n今回修正予想 28,000\n"),
+        ]:
+            parse_job = DocumentParseJobRecord(
+                file_id=file_record.id,
+                parser_name=parser_name,
+                parser_version=parser_version,
+                parse_status="completed",
+                text_path=str(tmp_path / f"{parser_name}.md"),
+                text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            )
+            session.add(parse_job)
+            await session.commit()
+            await session.refresh(parse_job)
+            await upsert_parse_text(
+                session,
+                parse_job=parse_job,
+                content_text=text,
+                pages_json={"pages": [{"page": 1, "markdown": text, "char_count": len(text)}]},
+                page_count=1,
+                char_count=len(text),
+                content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            )
+        default_response = await search_parse_texts(session)
+        clean_text_response = await search_parse_texts(session, text_query="28,000")
+        ignored_garbled_response = await search_parse_texts(session, text_query="garbled-token")
+        explicit_pymupdf_response = await search_parse_texts(
+            session,
+            text_query="garbled-token",
+            parser_name=PARSER_NAME,
+        )
+
+    assert default_response.total == 1
+    assert default_response.results[0].parser_name == IXBRL_TEXT_PARSER_NAME
+    assert clean_text_response.total == 1
+    assert clean_text_response.results[0].parser_name == IXBRL_TEXT_PARSER_NAME
+    assert ignored_garbled_response.total == 0
+    assert explicit_pymupdf_response.total == 1
+    assert explicit_pymupdf_response.results[0].parser_name == PARSER_NAME
     await engine.dispose()

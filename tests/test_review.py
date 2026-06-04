@@ -24,6 +24,30 @@ def test_score_pages_flags_sparse_extraction():
     assert "large PDF with sparse extracted text" in warnings
 
 
+def test_score_pages_flags_dense_garbled_extraction():
+    garbled = ("\x01\x02\x03J®XG}uvªLMc\x89§\x9a<br>" * 35) + "|<br>|<br>|<br>|"
+
+    score, warnings = score_pages(
+        [ParsedPage(page=1, markdown=garbled, char_count=len(garbled))],
+        file_size_bytes=152_301,
+    )
+
+    assert score >= 40
+    assert "high control-character ratio with no Japanese text" in warnings
+
+
+def test_score_pages_does_not_flag_plain_ascii_text_as_garbled():
+    text = "Revenue forecast update with normal extractable ASCII text. " * 20
+
+    score, warnings = score_pages(
+        [ParsedPage(page=1, markdown=text, char_count=len(text))],
+        file_size_bytes=152_301,
+    )
+
+    assert score == 0
+    assert warnings == ("looks normal",)
+
+
 @pytest.mark.asyncio
 async def test_build_parse_review_report(tmp_path, monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

@@ -20,6 +20,7 @@ from .parsers import PARSER_NAME, get_parser_version
 logger = logging.getLogger(__name__)
 
 ReviewStrategy = Literal["suspicious", "random", "recent", "forecast-correction"]
+_TEXT_WHITESPACE = {"\n", "\r", "\t"}
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,39 @@ def _load_pages(path: Path) -> list[ParsedPage]:
     return pages
 
 
+def _is_japanese_character(character: str) -> bool:
+    codepoint = ord(character)
+    return (
+        0x3040 <= codepoint <= 0x30FF
+        or 0x3400 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+        or 0xFF66 <= codepoint <= 0xFF9F
+    )
+
+
+def _garbled_text_warnings(text: str) -> tuple[tuple[str, int], ...]:
+    if not text:
+        return ()
+
+    total_chars = len(text)
+    japanese_chars = sum(1 for character in text if _is_japanese_character(character))
+    control_chars = sum(1 for character in text if ord(character) < 32 and character not in _TEXT_WHITESPACE)
+    replacement_chars = text.count("\ufffd")
+    latin1_symbol_chars = sum(1 for character in text if 0x80 <= ord(character) <= 0xFF)
+    table_breaks = text.count("<br>")
+
+    warnings: list[tuple[str, int]] = []
+    if total_chars >= 300 and japanese_chars == 0 and control_chars / total_chars >= 0.02:
+        warnings.append(("high control-character ratio with no Japanese text", 45))
+    if total_chars >= 300 and japanese_chars == 0 and latin1_symbol_chars / total_chars >= 0.05:
+        warnings.append(("high Latin-1 symbol ratio with no Japanese text", 25))
+    if total_chars >= 300 and replacement_chars / total_chars >= 0.01:
+        warnings.append(("many replacement characters", 30))
+    if table_breaks >= 25 and japanese_chars == 0:
+        warnings.append(("markdown table dominated by empty line breaks", 20))
+    return tuple(warnings)
+
+
 def score_pages(
     pages: list[ParsedPage],
     *,
@@ -90,6 +124,7 @@ def score_pages(
     total_chars = sum(page.char_count for page in pages)
     average_chars = total_chars / len(pages)
     low_text_pages = sum(1 for page in pages if page.char_count < 120)
+    combined_text = "\n".join(page.markdown for page in pages)
 
     if total_chars < 300:
         score += 40
@@ -106,6 +141,9 @@ def score_pages(
     if file_size_bytes and file_size_bytes > 2_000_000 and total_chars < 1000:
         score += 25
         warnings.append("large PDF with sparse extracted text")
+    for warning, warning_score in _garbled_text_warnings(combined_text):
+        score += warning_score
+        warnings.append(warning)
 
     return score, tuple(warnings or ("looks normal",))
 

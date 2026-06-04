@@ -73,7 +73,8 @@ echo "Starting TDnet review backend on http://${BACKEND_HOST}:${BACKEND_PORT}"
   cd "${REPO_ROOT}"
   uv run --extra layout uvicorn app.backend.main:app \
     --host "${BACKEND_HOST}" \
-    --port "${BACKEND_PORT}"
+    --port "${BACKEND_PORT}" \
+    --reload
 ) &
 BACKEND_PID="$!"
 

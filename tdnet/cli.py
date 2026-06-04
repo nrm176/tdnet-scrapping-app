@@ -11,6 +11,11 @@ from datetime import date, datetime
 
 from .artifacts import download_pending_files
 from .database import SessionLocal, init_db
+from .ixbrl_text import (
+    IXBRL_TEXT_PARSER_NAME,
+    get_ixbrl_text_parser_version,
+    parse_ixbrl_text_pending,
+)
 from .logging_config import configure_logging
 from .models import TdnetDisclosure, TdnetScrapingResult
 from .ocr import APPLE_VISION_OCR_NAME, get_apple_vision_parser_version, ocr_pending_files
@@ -85,6 +90,8 @@ def _resolve_parser_version(parser_name: str, parser_version: str | None) -> str
         return parser_version
     if parser_name == APPLE_VISION_OCR_NAME:
         return get_apple_vision_parser_version()
+    if parser_name == IXBRL_TEXT_PARSER_NAME:
+        return get_ixbrl_text_parser_version()
     if parser_name == PARSER_NAME:
         return get_parser_version()
     return None
@@ -240,6 +247,49 @@ async def _ocr_downloaded(args: argparse.Namespace) -> int:
     print(f"Total pending OCR candidates: {summary.total_pending}")
     print(f"Candidate files: {summary.candidates}")
     print(f"OCR completed files: {summary.ocr_completed}")
+    print(f"Skipped files: {summary.skipped}")
+    print(f"Failed files: {summary.failed}")
+    print(f"Elapsed seconds: {summary.elapsed_seconds:.2f}")
+    print(f"Files per second: {summary.files_per_second:.3f}")
+    print(f"Average file seconds: {summary.average_file_seconds:.3f}")
+    print(f"Median file seconds: {summary.median_file_seconds:.3f}")
+    print(f"Estimated total time: {format_seconds(summary.estimated_total_seconds)}")
+    print(f"Estimated remaining time: {format_seconds(summary.estimated_remaining_seconds)}")
+    return 1 if summary.failed else 0
+
+
+async def _parse_ixbrl_text(args: argparse.Namespace) -> int:
+    await init_db()
+    logging.info(
+        "Starting iXBRL text job strategy=%s limit=%s file_id=%s retry_failed=%s",
+        args.strategy,
+        args.limit,
+        args.file_id,
+        args.retry_failed,
+    )
+    async with SessionLocal() as session:
+        summary = await parse_ixbrl_text_pending(
+            session,
+            strategy=args.strategy,
+            limit=args.limit,
+            file_id=args.file_id,
+            retry_failed=args.retry_failed,
+            source_parser_version=args.source_parser_version,
+            parser_version=args.parser_version,
+        )
+    logging.info(
+        "Finished iXBRL text job candidates=%s parsed=%s skipped=%s failed=%s elapsed_seconds=%.3f "
+        "estimated_remaining=%s",
+        summary.candidates,
+        summary.parsed,
+        summary.skipped,
+        summary.failed,
+        summary.elapsed_seconds,
+        format_seconds(summary.estimated_remaining_seconds),
+    )
+    print(f"Total pending iXBRL candidates: {summary.total_pending}")
+    print(f"Candidate files: {summary.candidates}")
+    print(f"Parsed files: {summary.parsed}")
     print(f"Skipped files: {summary.skipped}")
     print(f"Failed files: {summary.failed}")
     print(f"Elapsed seconds: {summary.elapsed_seconds:.2f}")
@@ -504,6 +554,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the Apple Vision OCR parser version identity.",
     )
     ocr_parser.set_defaults(handler=lambda args: asyncio.run(_ocr_downloaded(args)))
+
+    ixbrl_parser = subparsers.add_parser(
+        "parse-ixbrl",
+        help="Extract readable text from downloaded TDnet iXBRL ZIP sidecars.",
+    )
+    ixbrl_parser.add_argument("--limit", type=int, default=100)
+    ixbrl_parser.add_argument("--file-id", type=int)
+    ixbrl_parser.add_argument(
+        "--strategy",
+        choices=["garbled", "forecast-correction", "all"],
+        default="garbled",
+        help="Which PDF/XBRL pairs to parse. Defaults to PyMuPDF parses that look garbled.",
+    )
+    ixbrl_parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Retry files previously marked failed for this iXBRL parser version.",
+    )
+    ixbrl_parser.add_argument(
+        "--source-parser-version",
+        help="PyMuPDF parser version to inspect for garbled text. Defaults to current version.",
+    )
+    ixbrl_parser.add_argument(
+        "--parser-version",
+        help="Override the iXBRL text parser version identity.",
+    )
+    ixbrl_parser.set_defaults(handler=lambda args: asyncio.run(_parse_ixbrl_text(args)))
 
     parse_text_parser = subparsers.add_parser(
         "persist-parse-text",

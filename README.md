@@ -125,6 +125,10 @@ scripts/tdnet_all_in_one.sh --days 7 --retag
 scripts/tdnet_all_in_one_with_ocr.sh --days 7
 ```
 
+The all-in-one script runs the main PDF parser by default and runs Apple Vision
+OCR only when `--with-ocr` is passed. It does not currently run the iXBRL text
+fallback; use `tdnet parse-ixbrl` separately when needed.
+
 Each execution writes a dedicated log file under `logs/` and updates a stable
 pointer to the newest run:
 
@@ -211,6 +215,19 @@ uv run --extra layout tdnet parse --limit 100 --workers 16
 When layout is installed, its version is included in the parser identity, so
 layout-enabled parses are tracked separately from earlier markdown artifacts.
 
+### Parser identities
+
+The current parser identities are:
+
+| Parser name | Source | Command | Notes |
+| --- | --- | --- | --- |
+| `pymupdf4llm` | PDF | `tdnet parse` | Main parser for downloaded PDFs. The parser version includes the PyMuPDF4LLM version, optional `pymupdf-layout` version, and TDnet normalizer version. |
+| `apple-vision-ocr` | PDF rendered to images | `tdnet ocr` | macOS Apple Vision fallback for sparse embedded text. Writes separate parse jobs and artifacts instead of overwriting PyMuPDF output. |
+| `tdnet-ixbrl-text` | downloaded XBRL/iXBRL ZIP sidecar | `tdnet parse-ixbrl` | Text fallback for PDF/XBRL pairs, especially when PyMuPDF text is garbled. Writes one-page markdown/page JSON artifacts under the PDF disclosure folder. |
+
+The review app exposes completed parser options through `/api/parsers` and
+groups them by parser name plus parser version.
+
 Completed parse jobs also persist searchable text into Postgres in
 `document_parse_texts`. The markdown remains on disk as the durable artifact,
 while Postgres stores:
@@ -246,6 +263,27 @@ parsed/
   apple-vision-ocr.<version>.pages.json
   apple-vision-ocr.<version>.meta.json
   ocr/apple-vision-ocr.<version>/page-001.png
+```
+
+Some disclosures include downloaded XBRL/iXBRL ZIP sidecars that contain cleaner
+visible text than the PDF extraction. Run the iXBRL fallback as a separate parse
+identity:
+
+```bash
+tdnet parse-ixbrl --strategy garbled --limit 100
+tdnet parse-ixbrl --strategy forecast-correction --limit 100
+tdnet parse-ixbrl --file-id 15820
+```
+
+iXBRL parse jobs use parser name `tdnet-ixbrl-text` and parser version
+`tdnet-1`. They are selected from completed PDF/XBRL disclosure pairs and write
+artifacts like:
+
+```text
+parsed/
+  tdnet-ixbrl-text.tdnet-1.md
+  tdnet-ixbrl-text.tdnet-1.pages.json
+  tdnet-ixbrl-text.tdnet-1.meta.json
 ```
 
 CLI jobs write runtime logs to:

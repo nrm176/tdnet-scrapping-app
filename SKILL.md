@@ -1,6 +1,6 @@
 ---
 name: tdnet-scraping-app
-description: Use when working in this TDnet codebase to scrape Japanese TDnet disclosures, persist records in async PostgreSQL, download PDF/XBRL artifacts, parse PDFs/OCR text, inspect processing state, or run the FastAPI review/search app.
+description: Use when working in this TDnet codebase to scrape Japanese TDnet disclosures, persist records in async PostgreSQL, download PDF/XBRL artifacts, parse PDFs/OCR text, inspect processing state, troubleshoot scripts/tdnet_all_in_one.sh and tdnet CLI pipeline jobs, reconcile local artifacts, or run the FastAPI review/search app.
 ---
 
 # TDnet Scraping App
@@ -69,6 +69,17 @@ scripts/tdnet_all_in_one.sh
 
 This defaults to the last 30 Asia/Tokyo days, starts Docker Postgres, prepares `.venv`, scrapes/persists, downloads, parses, and backfills parse text. It writes `logs/tdnet-all-in-one-<run_id>.log`. Add `--with-ocr` or `--with-review` only when those phases are needed.
 
+Useful all-in-one variants:
+
+```bash
+scripts/tdnet_all_in_one.sh --days 7 --parse-workers 16
+scripts/tdnet_all_in_one.sh --start-date 2026-05-01 --end-date 2026-05-15 --retry-failed
+scripts/tdnet_all_in_one.sh --scrape-lookback-days 2
+scripts/tdnet_all_in_one.sh --force-scrape
+scripts/tdnet_all_in_one.sh --with-ocr --with-review
+scripts/tdnet_all_in_one.sh --days 7 --retag
+```
+
 Scrape and persist one date:
 
 ```bash
@@ -107,11 +118,61 @@ Run OCR for sparse text extraction:
 tdnet ocr --strategy low-text --limit 100 --workers 4
 ```
 
+Extract text from downloaded XBRL/iXBRL sidecars:
+
+```bash
+tdnet parse-ixbrl --strategy garbled --limit 100
+tdnet parse-ixbrl --strategy forecast-correction --limit 100
+```
+
 Create parse review reports:
 
 ```bash
 tdnet review-parse --strategy suspicious --limit 50
 ```
+
+Use `--dry-run` on the all-in-one script when checking command construction or date/checkpoint behavior without side effects.
+
+## Parser Identities
+
+Current parser names:
+
+- `pymupdf4llm`: main PDF parser used by `tdnet parse`.
+- `apple-vision-ocr`: macOS Apple Vision OCR fallback used by `tdnet ocr`.
+- `tdnet-ixbrl-text`: XBRL/iXBRL sidecar text fallback used by `tdnet parse-ixbrl`.
+
+Parser versions are part of the parse identity. PyMuPDF versions may differ when optional `pymupdf-layout` is installed. The review app lists completed parser options by parser name plus parser version through `/api/parsers`.
+
+The all-in-one script runs `tdnet parse` by default and OCR only with `--with-ocr`. It does not currently run `tdnet parse-ixbrl`; run that command separately when the iXBRL fallback is needed.
+
+## Pipeline Operations
+
+Before running or debugging pipeline commands, inspect the local state:
+
+```bash
+docker compose ps postgres
+test -x .venv/bin/python && .venv/bin/python --version || true
+test -x .venv/bin/tdnet && .venv/bin/tdnet --help >/dev/null || true
+```
+
+During long runs, follow the latest all-in-one log:
+
+```bash
+tail -n 120 logs/tdnet-all-in-one-latest.log
+rg -n "CHECKPOINT|STEP_START|STEP_FINISH|STEP_SKIP|COMMAND_FAIL|status=failed|status=success" logs/tdnet-all-in-one-latest.log
+```
+
+If a run fails, identify the failing step, command, exit code, and nearest error context. Prefer fixing the failing step and rerunning the narrowest safe command before rerunning the full pipeline.
+
+Triage checklist:
+
+- Scrape: check `CHECKPOINT` lines first; confirm requested dates, effective start/end, `--force-scrape`, and `--scrape-lookback-days`.
+- Download: verify expected paths under the TDnet download buckets; non-empty local files should reconcile to completed without another HTTP request.
+- Parse: verify the PDF row has `download_status=completed`; completed parse jobs for the current parser identity should be skipped.
+- OCR: run only when needed for sparse text parses, using explicit limits and worker counts.
+- iXBRL: run `tdnet parse-ixbrl` for completed PDF/XBRL pairs when PyMuPDF text is garbled or forecast-correction sidecar text is preferred.
+- Backfill: use `tdnet persist-parse-text`; it should strip NUL characters before inserting text or JSONB.
+- Schema: remember `init_db()` creates missing tables only and does not alter existing Docker-volume tables.
 
 ## APIs And Apps
 

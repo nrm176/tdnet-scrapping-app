@@ -4,8 +4,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal, Sequence
 
-from sqlalchemy import Select, distinct, func, or_, select
+from sqlalchemy import Select, and_, case, distinct, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.backend.schemas import (
     ParsedPageResponse,
@@ -29,8 +30,16 @@ from tdnet.orm import (
     DocumentParseJobRecord,
     DocumentParseTextRecord,
 )
+from tdnet.ixbrl_text import IXBRL_TEXT_PARSER_NAME
+from tdnet.ocr import APPLE_VISION_OCR_NAME
+from tdnet.parsers import PARSER_NAME
 
 TagMode = Literal["any", "all"]
+PARSER_PRIORITY = {
+    IXBRL_TEXT_PARSER_NAME: 30,
+    APPLE_VISION_OCR_NAME: 20,
+    PARSER_NAME: 10,
+}
 
 
 def _escape_like(value: str) -> str:
@@ -91,6 +100,37 @@ def _base_join() -> Select:
     )
 
 
+def _parser_priority_expr(parse_job_model):
+    return case(
+        *[
+            (parse_job_model.parser_name == parser_name, priority)
+            for parser_name, priority in PARSER_PRIORITY.items()
+        ],
+        else_=0,
+    )
+
+
+def _prefer_best_parse_per_file(stmt: Select) -> Select:
+    other_job = aliased(DocumentParseJobRecord)
+    other_text = aliased(DocumentParseTextRecord)
+    current_priority = _parser_priority_expr(DocumentParseJobRecord)
+    other_priority = _parser_priority_expr(other_job)
+    better_parse_exists = (
+        select(other_job.id)
+        .join(other_text, other_text.parse_job_id == other_job.id)
+        .where(other_job.file_id == DocumentParseJobRecord.file_id)
+        .where(other_job.parse_status == "completed")
+        .where(
+            or_(
+                other_priority > current_priority,
+                and_(other_priority == current_priority, other_job.id > DocumentParseJobRecord.id),
+            )
+        )
+        .exists()
+    )
+    return stmt.where(~better_parse_exists)
+
+
 def _apply_filters(
     stmt: Select,
     *,
@@ -109,6 +149,8 @@ def _apply_filters(
         stmt = stmt.where(DocumentParseJobRecord.parser_name == parser_name)
     if parser_version:
         stmt = stmt.where(DocumentParseJobRecord.parser_version == parser_version)
+    if not parser_name and not parser_version:
+        stmt = _prefer_best_parse_per_file(stmt)
     if code:
         stmt = stmt.where(DisclosureRecord.code == code.strip().upper())
     if date_from:

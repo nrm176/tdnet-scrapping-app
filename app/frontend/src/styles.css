@@ -497,11 +497,18 @@ select {
   border-bottom: 1px solid #edf0f4;
   border-left: 3px solid transparent;
   background: #ffffff;
+  cursor: pointer;
   text-align: left;
+  user-select: text;
 }
 
 .result-row:hover {
   background: #f8fafc;
+}
+
+.result-row:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: -2px;
 }
 
 .result-row.selected {

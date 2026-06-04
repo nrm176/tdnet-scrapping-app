@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import {
   CalendarDays,
   ChevronLeft,
@@ -309,6 +309,14 @@ function App() {
     );
   }
 
+  function selectResultFromKeyboard(event: KeyboardEvent<HTMLDivElement>, parseJobId: number) {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    setSelectedId(parseJobId);
+  }
+
   function clearDateFilters() {
     setDateFrom("");
     setDateTo("");
@@ -576,11 +584,14 @@ function App() {
           </div>
           <div className="result-list">
             {results.map((result) => (
-              <button
+              <div
                 key={result.parse_job_id}
                 className={`result-row ${selectedId === result.parse_job_id ? "selected" : ""}`}
-                type="button"
+                role="button"
+                tabIndex={0}
+                aria-current={selectedId === result.parse_job_id ? "true" : undefined}
                 onClick={() => setSelectedId(result.parse_job_id)}
+                onKeyDown={(event) => selectResultFromKeyboard(event, result.parse_job_id)}
               >
                 <div className="result-line">
                   <span className="date">{result.disclosure_date}</span>
@@ -608,7 +619,7 @@ function App() {
                   <span>{result.page_count}p</span>
                   <span>{formatNumber(result.char_count)} chars</span>
                 </div>
-              </button>
+              </div>
             ))}
             {!loading && !results.length ? (
               <div className="empty-state">
