@@ -30,6 +30,9 @@ Use this skill for code changes, operational runs, debugging pipeline state, or 
 - `tdnet/api.py`: read-only disclosure/artifact API.
 - `app/backend/`: review/search FastAPI backend.
 - `app/frontend/`: Vite React review UI.
+- `docs/architecture.md`: ingestion-to-review flow diagram.
+- `docs/data-model.md`: PostgreSQL ER diagram, table guide, parser identities, and artifact lineage.
+- `docs/feature-backlog.md`: prioritized feature backlog and linked GitHub issues.
 - `tests/`: pytest suite.
 
 ## Environment

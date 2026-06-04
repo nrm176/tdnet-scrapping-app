@@ -29,6 +29,15 @@ The default application database URL is:
 postgresql+asyncpg://tdnet:tdnet@localhost:55432/tdnet
 ```
 
+## Data model
+
+See [`docs/data-model.md`](docs/data-model.md) for the PostgreSQL entity
+relationship diagram, table guide, parser identities, and disk artifact
+lineage.
+
+See [`docs/feature-backlog.md`](docs/feature-backlog.md) for the prioritized
+feature backlog and linked GitHub issues.
+
 ## API usage
 
 Start the FastAPI app:
