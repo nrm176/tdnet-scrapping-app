@@ -192,7 +192,7 @@ Review backend:
 uvicorn app.backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Review API routes include `/api/health`, `/api/parsers`, `/api/parser-quality`, `/api/calendar`, `/api/search`, `/api/review-queue`, `/api/parse-jobs/{id}`, and `/api/parse-jobs/{id}/page-image`.
+Review API routes include `/api/health`, `/api/parsers`, `/api/parser-quality`, `/api/calendar`, `/api/search`, `/api/review-queue`, `/api/companies/{code}/timeline`, `/api/parse-jobs/{id}`, and `/api/parse-jobs/{id}/page-image`.
 
 Review frontend:
 

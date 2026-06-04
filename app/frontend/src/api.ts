@@ -1,4 +1,5 @@
 import type {
+  CompanyTimelineResponse,
   ParseJobDetail,
   ParseSearchResponse,
   ParserOption,
@@ -32,6 +33,21 @@ type CalendarParams = {
   code?: string;
   tags?: string[];
   tagMode?: "any" | "all";
+};
+
+type CompanyTimelineParams = {
+  code: string;
+  titleQuery?: string;
+  textQuery?: string;
+  parserName?: string;
+  parserVersion?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  tags?: string[];
+  tagMode?: "any" | "all";
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
 };
 
 async function requestJson<T>(url: string): Promise<T> {
@@ -121,6 +137,23 @@ export async function fetchReportCalendar(params: CalendarParams): Promise<Repor
   appendOptionalList(query, "tags", params.tags);
   appendOptional(query, "tag_mode", params.tagMode);
   return requestJson<ReportCalendarResponse>(`/api/calendar?${query.toString()}`);
+}
+
+export async function fetchCompanyTimeline(params: CompanyTimelineParams): Promise<CompanyTimelineResponse> {
+  const code = params.code.trim().toUpperCase();
+  const query = new URLSearchParams();
+  appendOptional(query, "title_q", params.titleQuery?.trim());
+  appendOptional(query, "text_q", params.textQuery?.trim());
+  appendOptional(query, "parser_name", params.parserName);
+  appendOptional(query, "parser_version", params.parserVersion);
+  appendOptional(query, "date_from", params.dateFrom);
+  appendOptional(query, "date_to", params.dateTo);
+  appendOptionalList(query, "tags", params.tags);
+  appendOptional(query, "tag_mode", params.tagMode);
+  appendOptional(query, "order", params.order ?? "desc");
+  appendOptional(query, "limit", params.limit ?? 50);
+  appendOptional(query, "offset", params.offset ?? 0);
+  return requestJson<CompanyTimelineResponse>(`/api/companies/${encodeURIComponent(code)}/timeline?${query.toString()}`);
 }
 
 export async function fetchParseJob(parseJobId: number): Promise<ParseJobDetail> {

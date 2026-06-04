@@ -76,6 +76,54 @@ export type ReportTagAssignment = {
   source: string;
 };
 
+export type CompanyTimelineFile = {
+  file_id: number;
+  file_type: string;
+  download_status: string;
+  file_size_bytes: number | null;
+  downloaded_at: string | null;
+  source_url: string;
+  storage_path: string;
+};
+
+export type CompanyTimelineParser = {
+  parse_job_id: number;
+  file_id: number;
+  parser_name: string;
+  parser_version: string;
+  parse_status: string;
+  parse_attempts: number;
+  parsed_at: string | null;
+  page_count: number | null;
+  char_count: number | null;
+  has_text: boolean;
+  last_parse_error: string | null;
+};
+
+export type CompanyTimelineDisclosure = {
+  disclosure_id: string;
+  disclosure_date: string;
+  time: string;
+  code: string;
+  company_name: string;
+  title: string;
+  xbrl_available: boolean;
+  tags: ReportTagAssignment[];
+  files: CompanyTimelineFile[];
+  parsers: CompanyTimelineParser[];
+  best_parse_job_id: number | null;
+  snippet: string;
+};
+
+export type CompanyTimelineResponse = {
+  code: string;
+  company_name: string | null;
+  total: number;
+  limit: number;
+  offset: number;
+  results: CompanyTimelineDisclosure[];
+};
+
 export type ParseSearchResult = {
   parse_job_id: number;
   file_id: number;

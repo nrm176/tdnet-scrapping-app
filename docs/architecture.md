@@ -52,6 +52,7 @@ flowchart LR
     searchApi["/api/search<br/>title, full text, tags, date, code"]
     parserQualityApi["/api/parser-quality<br/>parser coverage + fallback candidates"]
     calendarApi["/api/calendar<br/>filtered monthly counts"]
+    timelineApi["/api/companies/{code}/timeline<br/>company disclosure history"]
     detailApi["/api/parse-jobs/{id}<br/>detail + parsed pages"]
     imageApi["/api/parse-jobs/{id}/page-image<br/>source PDF render"]
     tagsApi["/api/tags<br/>tag labels + counts"]
@@ -65,6 +66,11 @@ flowchart LR
   tagAssignments --> searchApi
   tdnetDisclosures --> calendarApi
   tagAssignments --> calendarApi
+  tdnetDisclosures --> timelineApi
+  disclosureFiles --> timelineApi
+  parseJobs --> timelineApi
+  parseTexts --> timelineApi
+  tagAssignments --> timelineApi
   parseTexts --> detailApi
   tagAssignments --> detailApi
   tagDefs --> tagsApi
@@ -77,17 +83,22 @@ flowchart LR
     results["Scrollable matched records<br/>tag chips + metadata"]
     detail["PDF image + parsed text detail"]
     calendar["Calendar counts"]
+    timeline["Company timeline<br/>disclosures, files, parser status"]
   end
 
   criteria --> searchApi
   quality --> parserQualityApi
   criteria --> calendarApi
+  criteria --> timelineApi
   criteria --> tagsApi
   searchApi --> results
   calendarApi --> calendar
+  timelineApi --> timeline
   tagsApi --> criteria
   results --> detailApi
+  results --> timeline
   results --> imageApi
+  timeline --> detailApi
   detailApi --> detail
   imageApi --> detail
 
@@ -100,8 +111,8 @@ flowchart LR
   class tdnet source
   class scrape,disclosures,download,parse,persistText,tagger job
   class tdnetDisclosures,disclosureFiles,parseJobs,parseTexts,tagDefs,tagAssignments,analysisResults,sourceFiles,parsedFiles,pageImages store
-  class searchApi,parserQualityApi,calendarApi,detailApi,imageApi,tagsApi api
-  class criteria,quality,results,detail,calendar ui
+  class searchApi,parserQualityApi,calendarApi,timelineApi,detailApi,imageApi,tagsApi api
+  class criteria,quality,results,detail,calendar,timeline ui
 ```
 
 ## Persistence Notes
