@@ -1,5 +1,7 @@
 import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import {
+  Activity,
+  AlertTriangle,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -13,13 +15,21 @@ import {
 import {
   fetchParseJob,
   fetchParsers,
+  fetchParserQuality,
   fetchReportCalendar,
   fetchReviewQueue,
   fetchTags,
   pageImageUrl,
   searchParseTexts,
 } from "./api";
-import type { ParseJobDetail, ParseSearchResult, ParserOption, ReportCalendarDay, ReportTag } from "./types";
+import type {
+  ParseJobDetail,
+  ParseSearchResult,
+  ParserOption,
+  ParserQuality,
+  ReportCalendarDay,
+  ReportTag,
+} from "./types";
 
 type ParserSelection = {
   parserName?: string;
@@ -75,6 +85,10 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
+function compactVersion(value: string): string {
+  return value.length > 28 ? `${value.slice(0, 25)}...` : value;
+}
+
 function formatDateKey(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -119,6 +133,7 @@ function buildCalendarCells(monthKey: string): CalendarCell[] {
 
 function App() {
   const [parsers, setParsers] = useState<ParserOption[]>([]);
+  const [parserQuality, setParserQuality] = useState<ParserQuality | null>(null);
   const [tags, setTags] = useState<ReportTag[]>([]);
   const [parserValue, setParserValue] = useState("");
   const [titleQuery, setTitleQuery] = useState("");
@@ -138,6 +153,7 @@ function App() {
   const [pageIndex, setPageIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const [initialResultsLoaded, setInitialResultsLoaded] = useState(false);
+  const [qualityLoading, setQualityLoading] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -194,6 +210,19 @@ function App() {
     return items;
   }, [appliedCriteria, appliedParserLabel, tagLabelBySlug]);
   const selectedDate = dateFrom && dateFrom === dateTo ? dateFrom : "";
+  const visibleQualityParsers = useMemo(
+    () =>
+      [...(parserQuality?.parsers ?? [])]
+        .sort(
+          (left, right) =>
+            right.parse_texts - left.parse_texts ||
+            right.total_jobs - left.total_jobs ||
+            right.failed_jobs - left.failed_jobs,
+        )
+        .slice(0, 4),
+    [parserQuality],
+  );
+  const latestParserError = parserQuality?.recent_errors[0] ?? null;
 
   function buildCriteria(overrides: SearchCriteriaOverrides = {}): SearchCriteria {
     return {
@@ -212,6 +241,19 @@ function App() {
     const options = await fetchParsers();
     setError(null);
     setParsers(options);
+  }
+
+  async function loadParserQuality() {
+    setQualityLoading(true);
+    try {
+      const summary = await fetchParserQuality();
+      setError(null);
+      setParserQuality(summary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load parser quality");
+    } finally {
+      setQualityLoading(false);
+    }
   }
 
   async function loadTags() {
@@ -351,6 +393,7 @@ function App() {
 
   useEffect(() => {
     loadParsers().catch((err) => setError(err instanceof Error ? err.message : "Failed to load parsers"));
+    loadParserQuality().catch((err) => setError(err instanceof Error ? err.message : "Failed to load parser quality"));
     loadTags().catch((err) => setError(err instanceof Error ? err.message : "Failed to load tags"));
   }, []);
 
@@ -402,6 +445,75 @@ function App() {
           <span>{formatNumber(parsers.reduce((sum, option) => sum + option.parse_texts, 0))} text rows</span>
         </div>
       </header>
+
+      <section className="quality-strip" aria-label="Parser quality dashboard">
+        <div className="quality-heading">
+          <div className="quality-title">
+            <Activity size={16} />
+            <strong>Parser quality</strong>
+            <span>{qualityLoading ? "Loading" : `${formatNumber(parserQuality?.total_jobs ?? 0)} jobs`}</span>
+          </div>
+          <button
+            className="square-button"
+            type="button"
+            title="Refresh parser quality"
+            disabled={qualityLoading}
+            onClick={() => {
+              loadParserQuality().catch((err) =>
+                setError(err instanceof Error ? err.message : "Failed to load parser quality"),
+              );
+            }}
+          >
+            <RefreshCw size={16} />
+          </button>
+        </div>
+        <div className="quality-metrics">
+          <div className="quality-metric">
+            <span>Completed</span>
+            <strong>{formatNumber(parserQuality?.completed_jobs ?? 0)}</strong>
+          </div>
+          <div className={`quality-metric ${(parserQuality?.failed_jobs ?? 0) > 0 ? "warning" : ""}`}>
+            <span>Failed</span>
+            <strong>{formatNumber(parserQuality?.failed_jobs ?? 0)}</strong>
+          </div>
+          <div className="quality-metric">
+            <span>Text rows</span>
+            <strong>{formatNumber(parserQuality?.parse_texts ?? 0)}</strong>
+          </div>
+          <div className={`quality-metric ${(parserQuality?.low_text_jobs ?? 0) > 0 ? "notice" : ""}`}>
+            <span>Low text</span>
+            <strong>{formatNumber(parserQuality?.low_text_jobs ?? 0)}</strong>
+          </div>
+          {(parserQuality?.fallback_candidates ?? []).map((candidate) => (
+            <div className="quality-metric notice" key={candidate.parser_name} title={candidate.description}>
+              <span>{candidate.name}</span>
+              <strong>{formatNumber(candidate.candidate_count)}</strong>
+            </div>
+          ))}
+        </div>
+        <div className="quality-parser-list">
+          {visibleQualityParsers.map((parser) => (
+            <div className="quality-parser-row" key={`${parser.parser_name}:${parser.parser_version}`}>
+              <div>
+                <strong>{parser.parser_name}</strong>
+                <span title={parser.parser_version}>{compactVersion(parser.parser_version)}</span>
+              </div>
+              <span>
+                {formatNumber(parser.completed_jobs)}/{formatNumber(parser.total_jobs)} jobs ·{" "}
+                {formatNumber(parser.parse_texts)} text · {formatNumber(parser.low_text_jobs)} low
+              </span>
+            </div>
+          ))}
+        </div>
+        {latestParserError ? (
+          <div className="quality-error" title={latestParserError.error}>
+            <AlertTriangle size={15} />
+            <span>
+              {latestParserError.parser_name} #{latestParserError.parse_job_id}: {latestParserError.error}
+            </span>
+          </div>
+        ) : null}
+      </section>
 
       <form className="search-band" onSubmit={runSearch}>
         <div className="search-fields">

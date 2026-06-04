@@ -80,6 +80,7 @@ scripts/tdnet_all_in_one.sh --start-date 2026-05-01 --end-date 2026-05-15 --retr
 scripts/tdnet_all_in_one.sh --scrape-lookback-days 2
 scripts/tdnet_all_in_one.sh --force-scrape
 scripts/tdnet_all_in_one.sh --with-ocr --with-review
+scripts/tdnet_all_in_one.sh --with-ixbrl --ixbrl-strategy garbled
 scripts/tdnet_all_in_one.sh --days 7 --retag
 ```
 
@@ -144,9 +145,9 @@ Current parser names:
 - `apple-vision-ocr`: macOS Apple Vision OCR fallback used by `tdnet ocr`.
 - `tdnet-ixbrl-text`: XBRL/iXBRL sidecar text fallback used by `tdnet parse-ixbrl`.
 
-Parser versions are part of the parse identity. PyMuPDF versions may differ when optional `pymupdf-layout` is installed. The review app lists completed parser options by parser name plus parser version through `/api/parsers`.
+Parser versions are part of the parse identity. PyMuPDF versions may differ when optional `pymupdf-layout` is installed. The review app lists completed parser options by parser name plus parser version through `/api/parsers` and parser health through `/api/parser-quality`.
 
-The all-in-one script runs `tdnet parse` by default and OCR only with `--with-ocr`. It does not currently run `tdnet parse-ixbrl`; run that command separately when the iXBRL fallback is needed.
+The all-in-one script runs `tdnet parse` by default, OCR only with `--with-ocr`, and iXBRL only with `--with-ixbrl`.
 
 ## Pipeline Operations
 
@@ -173,7 +174,7 @@ Triage checklist:
 - Download: verify expected paths under the TDnet download buckets; non-empty local files should reconcile to completed without another HTTP request.
 - Parse: verify the PDF row has `download_status=completed`; completed parse jobs for the current parser identity should be skipped.
 - OCR: run only when needed for sparse text parses, using explicit limits and worker counts.
-- iXBRL: run `tdnet parse-ixbrl` for completed PDF/XBRL pairs when PyMuPDF text is garbled or forecast-correction sidecar text is preferred.
+- iXBRL: run `tdnet parse-ixbrl` directly, or `scripts/tdnet_all_in_one.sh --with-ixbrl`, for completed PDF/XBRL pairs when PyMuPDF text is garbled or forecast-correction sidecar text is preferred.
 - Backfill: use `tdnet persist-parse-text`; it should strip NUL characters before inserting text or JSONB.
 - Schema: remember `init_db()` creates missing tables only and does not alter existing Docker-volume tables.
 
@@ -191,7 +192,7 @@ Review backend:
 uvicorn app.backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Review API routes include `/api/health`, `/api/parsers`, `/api/calendar`, `/api/search`, `/api/review-queue`, `/api/parse-jobs/{id}`, and `/api/parse-jobs/{id}/page-image`.
+Review API routes include `/api/health`, `/api/parsers`, `/api/parser-quality`, `/api/calendar`, `/api/search`, `/api/review-queue`, `/api/parse-jobs/{id}`, and `/api/parse-jobs/{id}/page-image`.
 
 Review frontend:
 

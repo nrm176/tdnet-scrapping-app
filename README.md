@@ -94,9 +94,10 @@ Open:
 http://127.0.0.1:5173/
 ```
 
-The backend exposes `/api/search`, `/api/parsers`, `/api/parse-jobs/{id}`, and
-`/api/parse-jobs/{id}/page-image`. On Postgres it prepares `pg_trgm` indexes for
-Japanese-friendly substring search over `document_parse_texts.content_text`.
+The backend exposes `/api/search`, `/api/parsers`, `/api/parser-quality`,
+`/api/parse-jobs/{id}`, and `/api/parse-jobs/{id}/page-image`. On Postgres it
+prepares `pg_trgm` indexes for Japanese-friendly substring search over
+`document_parse_texts.content_text`.
 
 ## CLI usage
 
@@ -130,13 +131,15 @@ scripts/tdnet_all_in_one.sh --start-date 2026-05-01 --end-date 2026-05-15 --retr
 scripts/tdnet_all_in_one.sh --days 30 --force-scrape
 scripts/tdnet_all_in_one.sh --scrape-lookback-days 2
 scripts/tdnet_all_in_one.sh --with-ocr --with-review
+scripts/tdnet_all_in_one.sh --with-ixbrl --ixbrl-strategy garbled
 scripts/tdnet_all_in_one.sh --days 7 --retag
 scripts/tdnet_all_in_one_with_ocr.sh --days 7
 ```
 
 The all-in-one script runs the main PDF parser by default and runs Apple Vision
-OCR only when `--with-ocr` is passed. It does not currently run the iXBRL text
-fallback; use `tdnet parse-ixbrl` separately when needed.
+OCR only when `--with-ocr` is passed. It runs the iXBRL text fallback when
+`--with-ixbrl` is passed; use `--ixbrl-limit` and `--ixbrl-strategy` to control
+that phase.
 
 Each execution writes a dedicated log file under `logs/` and updates a stable
 pointer to the newest run:
@@ -234,8 +237,9 @@ The current parser identities are:
 | `apple-vision-ocr` | PDF rendered to images | `tdnet ocr` | macOS Apple Vision fallback for sparse embedded text. Writes separate parse jobs and artifacts instead of overwriting PyMuPDF output. |
 | `tdnet-ixbrl-text` | downloaded XBRL/iXBRL ZIP sidecar | `tdnet parse-ixbrl` | Text fallback for PDF/XBRL pairs, especially when PyMuPDF text is garbled. Writes one-page markdown/page JSON artifacts under the PDF disclosure folder. |
 
-The review app exposes completed parser options through `/api/parsers` and
-groups them by parser name plus parser version.
+The review app exposes completed parser options through `/api/parsers`, groups
+them by parser name plus parser version, and exposes parser health through
+`/api/parser-quality`.
 
 Completed parse jobs also persist searchable text into Postgres in
 `document_parse_texts`. The markdown remains on disk as the durable artifact,
@@ -276,12 +280,13 @@ parsed/
 
 Some disclosures include downloaded XBRL/iXBRL ZIP sidecars that contain cleaner
 visible text than the PDF extraction. Run the iXBRL fallback as a separate parse
-identity:
+identity directly, or opt into it during all-in-one runs:
 
 ```bash
 tdnet parse-ixbrl --strategy garbled --limit 100
 tdnet parse-ixbrl --strategy forecast-correction --limit 100
 tdnet parse-ixbrl --file-id 15820
+scripts/tdnet_all_in_one.sh --with-ixbrl --ixbrl-strategy garbled --ixbrl-limit 100
 ```
 
 iXBRL parse jobs use parser name `tdnet-ixbrl-text` and parser version
