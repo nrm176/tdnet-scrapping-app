@@ -139,7 +139,8 @@ scripts/tdnet_all_in_one_with_ocr.sh --days 7
 The all-in-one script runs the main PDF parser by default and runs Apple Vision
 OCR only when `--with-ocr` is passed. It runs the iXBRL text fallback when
 `--with-ixbrl` is passed; use `--ixbrl-limit` and `--ixbrl-strategy` to control
-that phase.
+that phase. The script avoids Bash 4-only builtins so it can run under macOS's
+default `/bin/bash` 3.2 as well as newer Homebrew Bash.
 
 Each execution writes a dedicated log file under `logs/` and updates a stable
 pointer to the newest run:
