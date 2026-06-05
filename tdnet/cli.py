@@ -11,6 +11,10 @@ from datetime import date, datetime
 
 from .artifacts import download_pending_files
 from .database import SessionLocal, init_db
+from .financial_facts import (
+    FINANCIAL_FACTS_ANALYZER_VERSION,
+    analyze_financial_facts,
+)
 from .ixbrl_text import (
     IXBRL_TEXT_PARSER_NAME,
     get_ixbrl_text_parser_version,
@@ -416,6 +420,66 @@ async def _tag_reports(args: argparse.Namespace) -> int:
     return 1 if summary.failed else 0
 
 
+async def _analyze_financials(args: argparse.Namespace) -> int:
+    await init_db()
+    parser_version = _resolve_parser_version(args.parser_name, args.parser_version)
+    analyzer_version = args.analyzer_version or FINANCIAL_FACTS_ANALYZER_VERSION
+    logging.info(
+        "Starting financial fact analysis parser_name=%s parser_version=%s analyzer_version=%s "
+        "limit=%s force=%s retry_failed=%s",
+        args.parser_name,
+        parser_version,
+        analyzer_version,
+        args.limit,
+        args.force,
+        args.retry_failed,
+    )
+    async with SessionLocal() as session:
+        summary = await analyze_financial_facts(
+            session,
+            parser_name=args.parser_name,
+            parser_version=parser_version,
+            analyzer_version=analyzer_version,
+            retry_failed=args.retry_failed,
+            force=args.force,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            code=args.code,
+            limit=args.limit,
+        )
+    logging.info(
+        "Finished financial fact analysis candidates=%s analyzed=%s skipped=%s failed=%s elapsed_seconds=%.3f",
+        summary.candidates,
+        summary.analyzed,
+        summary.skipped,
+        summary.failed,
+        summary.elapsed_seconds,
+    )
+    payload = {
+        "total_pending": summary.total_pending,
+        "candidates": summary.candidates,
+        "analyzed": summary.analyzed,
+        "skipped": summary.skipped,
+        "failed": summary.failed,
+        "elapsed_seconds": summary.elapsed_seconds,
+        "fact_counts": summary.fact_counts,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"Total pending analyses: {summary.total_pending}")
+        print(f"Candidate parse jobs: {summary.candidates}")
+        print(f"Analyzed parse jobs: {summary.analyzed}")
+        print(f"Skipped parse jobs: {summary.skipped}")
+        print(f"Failed parse jobs: {summary.failed}")
+        print(f"Elapsed seconds: {summary.elapsed_seconds:.2f}")
+        if summary.fact_counts:
+            print("Fact counts:")
+            for fact_name, count in summary.fact_counts.items():
+                print(f"  {fact_name}: {count}")
+    return 1 if summary.failed else 0
+
+
 async def _list_report_tags(args: argparse.Namespace) -> int:
     await init_db()
     async with SessionLocal() as session:
@@ -627,6 +691,40 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     tag_parser.add_argument("--json", action="store_true")
     tag_parser.set_defaults(handler=lambda args: asyncio.run(_tag_reports(args)))
+
+    financials_parser = subparsers.add_parser(
+        "analyze-financials",
+        help="Extract deterministic financial facts into document_analysis_results.",
+    )
+    financials_parser.add_argument("--limit", type=int, default=1000)
+    financials_parser.add_argument("--from", dest="date_from", type=_parse_date)
+    financials_parser.add_argument("--to", dest="date_to", type=_parse_date)
+    financials_parser.add_argument("--code")
+    financials_parser.add_argument(
+        "--parser-name",
+        default=PARSER_NAME,
+        help="Parser identity to analyze. Defaults to the current PDF parser.",
+    )
+    financials_parser.add_argument(
+        "--parser-version",
+        help="Parser version to analyze. Defaults to the current version for known parsers.",
+    )
+    financials_parser.add_argument(
+        "--analyzer-version",
+        help="Override the financial facts analyzer version identity.",
+    )
+    financials_parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Retry analyses previously marked failed for this analyzer version.",
+    )
+    financials_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Recalculate analyses already completed by this analyzer version.",
+    )
+    financials_parser.add_argument("--json", action="store_true")
+    financials_parser.set_defaults(handler=lambda args: asyncio.run(_analyze_financials(args)))
 
     list_tags_parser = subparsers.add_parser(
         "list-tags",

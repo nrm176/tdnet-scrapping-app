@@ -133,7 +133,7 @@ erDiagram
 | `disclosure_files` | One row per source artifact type for a disclosure, currently PDF or XBRL. Tracks source URL, expected local path, hash, size, download status, attempts, and errors. |
 | `document_parse_jobs` | One row per file and parser identity. Tracks parser name/version, status, attempts, text artifact path, hash, parse time, and errors. |
 | `document_parse_texts` | Searchable text cache for completed parse jobs. Stores normalized full text plus page-level JSON used by search/detail views. |
-| `document_analysis_results` | Reserved downstream analysis outputs. Keeps analyzer lineage separate from download and parse state. |
+| `document_analysis_results` | Downstream analysis outputs such as deterministic financial facts. Keeps analyzer lineage separate from download and parse state. |
 | `tdnet_report_tags` | Deterministic report tag taxonomy. |
 | `tdnet_report_tag_assignments` | Disclosure-level tag assignments with optional file/parse-job evidence lineage. |
 
@@ -164,7 +164,9 @@ tdnet_report_tag_assignments -> tdnet_disclosures, tdnet_report_tags, optional d
 ```
 
 This separation lets parser history, searchable text, tagging, and later
-business analysis evolve independently.
+business analysis evolve independently. `tdnet analyze-financials` writes
+structured financial fact payloads here using `file_id` and `parse_job_id`
+lineage back to the parsed disclosure text.
 
 ## Parser Identities
 

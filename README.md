@@ -212,6 +212,15 @@ already have a completed `document_parse_jobs` row for the current
 Use `tdnet parse --retry-failed` to retry files with failed parse jobs.
 Analysis state remains separate in `document_analysis_results`, so downstream
 business extraction can evolve without overloading download or parse state.
+After backfilling parse text, run `tdnet analyze-financials` to extract
+deterministic financial facts such as sales, profit, EPS, dividends, and
+forecast revision rows into that analysis table with parser lineage:
+
+```bash
+tdnet analyze-financials --limit 1000
+tdnet analyze-financials --retry-failed --limit 100
+```
+
 Parsing uses worker processes for CPU-bound PDF extraction. By default,
 `tdnet parse` uses the detected CPU count; pass `--workers 16` on a 16-core
 machine to be explicit, or lower it if `pymupdf-layout` memory use is high.
