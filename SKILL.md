@@ -255,6 +255,8 @@ python -m ruff check tdnet tests app
 python -m pytest -q
 ```
 
+For PR handoff, follow `AGENTS.md` Pull Request Handoff and verify GitHub mergeability.
+
 For frontend changes:
 
 ```bash

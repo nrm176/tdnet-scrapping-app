@@ -15,6 +15,18 @@ This repository is the canonical TDnet application. Work here, not in sibling le
 - Do not increment `download_attempts` when reconciling an already-present local file; attempts count actual HTTP download attempts.
 - Do not commit or rely on runtime outputs: `logs/`, `.venv/`, `dist/`, caches, downloaded files, parse reviews, and `node_modules/`.
 
+## Pull Request Handoff
+
+Before telling the user a PR is ready for review:
+
+- Fetch the latest `origin/main`.
+- Rebase or merge the feature branch onto current `origin/main`, unless the PR is intentionally stacked.
+- Resolve conflicts locally and preserve already-merged related work.
+- Rerun relevant validation.
+- Push the updated branch.
+- Confirm GitHub reports the PR as mergeable, for example with `gh pr view <number> --json mergeable`.
+- If the PR intentionally depends on another unmerged PR, state that dependency clearly instead of calling it ready.
+
 ## Common Setup
 
 ```bash
