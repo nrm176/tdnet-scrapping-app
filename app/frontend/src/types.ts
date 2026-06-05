@@ -140,6 +140,7 @@ export type ParseSearchResult = {
   parsed_at: string | null;
   snippet: string;
   tags: ReportTagAssignment[];
+  matched_pages: ParsedPageMatch[];
 };
 
 export type ParseSearchResponse = {
@@ -154,6 +155,11 @@ export type ParsedPage = {
   page: number;
   markdown: string;
   char_count: number;
+};
+
+export type ParsedPageMatch = {
+  page: number;
+  snippet: string;
 };
 
 export type ParseJobDetail = ParseSearchResult & {

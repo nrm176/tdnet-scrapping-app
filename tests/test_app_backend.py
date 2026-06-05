@@ -140,6 +140,8 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
     assert response.total == 1
     assert response.results[0].code == "85600"
     assert "18,000" in response.results[0].snippet
+    assert response.results[0].matched_pages[0].page == 1
+    assert "18,000" in response.results[0].matched_pages[0].snippet
     assert title_response.total == 1
     assert text_response.total == 1
     assert title_miss_response.total == 0
@@ -378,6 +380,11 @@ async def test_search_parse_texts_prefers_best_parser_by_default(tmp_path):
         default_response = await search_parse_texts(session)
         clean_text_response = await search_parse_texts(session, text_query="28,000")
         ignored_garbled_response = await search_parse_texts(session, text_query="garbled-token")
+        all_parser_response = await search_parse_texts(
+            session,
+            text_query="garbled-token",
+            best_only=False,
+        )
         explicit_pymupdf_response = await search_parse_texts(
             session,
             text_query="garbled-token",
@@ -389,6 +396,8 @@ async def test_search_parse_texts_prefers_best_parser_by_default(tmp_path):
     assert clean_text_response.total == 1
     assert clean_text_response.results[0].parser_name == IXBRL_TEXT_PARSER_NAME
     assert ignored_garbled_response.total == 0
+    assert all_parser_response.total == 1
+    assert all_parser_response.results[0].parser_name == PARSER_NAME
     assert explicit_pymupdf_response.total == 1
     assert explicit_pymupdf_response.results[0].parser_name == PARSER_NAME
     await engine.dispose()

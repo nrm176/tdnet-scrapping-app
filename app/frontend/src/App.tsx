@@ -1,4 +1,4 @@
-import { type FormEvent, type KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -56,6 +56,7 @@ type SearchCriteria = {
   tags: string[];
   tagMode: "any" | "all";
   parserValue: string;
+  bestOnly: boolean;
 };
 
 type SearchCriteriaOverrides = Partial<Omit<SearchCriteria, "tags">> & {
@@ -71,6 +72,7 @@ const EMPTY_CRITERIA: SearchCriteria = {
   tags: [],
   tagMode: "any",
   parserValue: "",
+  bestOnly: true,
 };
 
 function parserKey(option: ParserOption): string {
@@ -93,8 +95,51 @@ function compactVersion(value: string): string {
   return value.length > 28 ? `${value.slice(0, 25)}...` : value;
 }
 
+function describeParserOption(option: ParserOption): string {
+  return `${option.parser_name} · ${compactVersion(option.parser_version)}`;
+}
+
+function renderHighlightedText(text: string, query: string): ReactNode {
+  const needle = query.trim();
+  if (!needle || !text) {
+    return text;
+  }
+
+  const loweredText = text.toLowerCase();
+  const loweredNeedle = needle.toLowerCase();
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  let hitIndex = loweredText.indexOf(loweredNeedle);
+  let key = 0;
+
+  while (hitIndex >= 0) {
+    if (hitIndex > cursor) {
+      parts.push(text.slice(cursor, hitIndex));
+    }
+    const end = hitIndex + needle.length;
+    parts.push(
+      <mark className="search-hit" key={`hit-${key}`}>
+        {text.slice(hitIndex, end)}
+      </mark>,
+    );
+    cursor = end;
+    key += 1;
+    hitIndex = loweredText.indexOf(loweredNeedle, cursor);
+  }
+
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+  return parts.length ? parts : text;
+}
+
 function normalizeCompanyCode(value: string): string {
   return value.trim().toUpperCase();
+}
+
+function pageIndexForPage(detail: ParseJobDetail, page: number): number {
+  const index = detail.pages.findIndex((candidate) => candidate.page === page);
+  return index >= 0 ? index : 0;
 }
 
 function summarizeTimelineFiles(item: CompanyTimelineDisclosure): string {
@@ -167,6 +212,7 @@ function App() {
   const [parserQuality, setParserQuality] = useState<ParserQuality | null>(null);
   const [tags, setTags] = useState<ReportTag[]>([]);
   const [parserValue, setParserValue] = useState("");
+  const [bestOnly, setBestOnly] = useState(true);
   const [titleQuery, setTitleQuery] = useState("");
   const [textQuery, setTextQuery] = useState("");
   const [code, setCode] = useState("");
@@ -184,6 +230,7 @@ function App() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detail, setDetail] = useState<ParseJobDetail | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
+  const [targetPage, setTargetPage] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [initialResultsLoaded, setInitialResultsLoaded] = useState(false);
   const [qualityLoading, setQualityLoading] = useState(false);
@@ -193,6 +240,10 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   const selectedPage = detail?.pages[pageIndex] ?? detail?.pages[0] ?? null;
+  const selectedResult = useMemo(
+    () => results.find((result) => result.parse_job_id === selectedId) ?? null,
+    [results, selectedId],
+  );
   const visibleText = selectedPage?.markdown || detail?.content_text || "";
   const activeTimelineCode = useMemo(
     () => normalizeCompanyCode(timelineCode || appliedCriteria.code || detail?.code || results[0]?.code || ""),
@@ -217,11 +268,12 @@ function App() {
   );
   const tagLabelBySlug = useMemo(() => new Map(tags.map((tag) => [tag.slug, tag.label_ja])), [tags]);
   const appliedParserLabel = useMemo(() => {
-    if (!appliedCriteria.parserValue) {
-      return "All parsers";
+    if (appliedCriteria.parserValue) {
+      const selectedParser = parsers.find((option) => parserKey(option) === appliedCriteria.parserValue);
+      return selectedParser ? describeParserOption(selectedParser) : appliedCriteria.parserValue.split("::")[0];
     }
-    return appliedCriteria.parserValue.split("::")[0] || "All parsers";
-  }, [appliedCriteria.parserValue]);
+    return appliedCriteria.bestOnly ? "Best parse per file" : "All parser outputs";
+  }, [appliedCriteria.bestOnly, appliedCriteria.parserValue, parsers]);
   const appliedCriteriaItems = useMemo(() => {
     const items: { label: string; value: string }[] = [];
     items.push({ label: "Parser", value: appliedParserLabel });
@@ -272,6 +324,7 @@ function App() {
       tags: overrides.tags ?? selectedTags,
       tagMode: overrides.tagMode ?? tagMode,
       parserValue: overrides.parserValue ?? parserValue,
+      bestOnly: overrides.bestOnly ?? bestOnly,
     };
   }
 
@@ -316,6 +369,7 @@ function App() {
         ...selection,
         tags: criteria.tags,
         tagMode: criteria.tagMode,
+        bestOnly: criteria.bestOnly,
         limit: 25,
       });
       setResults(response.results);
@@ -340,6 +394,7 @@ function App() {
         code: appliedCriteria.code,
         tags: appliedCriteria.tags,
         tagMode: appliedCriteria.tagMode,
+        bestOnly: appliedCriteria.bestOnly,
         ...selection,
       });
       setError(null);
@@ -369,6 +424,7 @@ function App() {
         dateTo: appliedCriteria.dateTo,
         tags: appliedCriteria.tags,
         tagMode: appliedCriteria.tagMode,
+        bestOnly: appliedCriteria.bestOnly,
         ...selection,
         limit: 50,
       });
@@ -396,6 +452,7 @@ function App() {
         dateTo: criteria.dateTo,
         tags: criteria.tags,
         tagMode: criteria.tagMode,
+        bestOnly: criteria.bestOnly,
         ...selection,
         limit: 25,
       });
@@ -424,7 +481,7 @@ function App() {
       return;
     }
     event.preventDefault();
-    setSelectedId(parseJobId);
+    selectParseJob(parseJobId);
   }
 
   function clearDateFilters() {
@@ -457,6 +514,22 @@ function App() {
     runSearch(undefined, { parserValue: value }).catch((err) =>
       setError(err instanceof Error ? err.message : "Search failed"),
     );
+  }
+
+  function changeBestOnly(value: boolean) {
+    setBestOnly(value);
+    runSearch(undefined, { bestOnly: value }).catch((err) =>
+      setError(err instanceof Error ? err.message : "Search failed"),
+    );
+  }
+
+  function selectParseJob(parseJobId: number, page?: number) {
+    if (detail?.parse_job_id === parseJobId && page !== undefined) {
+      setPageIndex(pageIndexForPage(detail, page));
+      return;
+    }
+    setTargetPage(page ?? null);
+    setSelectedId(parseJobId);
   }
 
   function openCompanyTimeline(nextCode: string) {
@@ -506,13 +579,18 @@ function App() {
     }
     setDetailLoading(true);
     setPageIndex(0);
+    const requestedPage = targetPage;
     fetchParseJob(selectedId)
       .then((value) => {
         setError(null);
         setDetail(value);
+        setPageIndex(requestedPage !== null ? pageIndexForPage(value, requestedPage) : 0);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load parse job"))
-      .finally(() => setDetailLoading(false));
+      .finally(() => {
+        setTargetPage(null);
+        setDetailLoading(false);
+      });
   }, [selectedId]);
 
   return (
@@ -618,13 +696,17 @@ function App() {
           <label className="field field-parser">
             <span>Parser</span>
             <select value={parserValue} onChange={(event) => changeParser(event.target.value)}>
-              <option value="">All parsers</option>
+              <option value="">{bestOnly ? "Best parse per file" : "All parser outputs"}</option>
               {parsers.map((option) => (
                 <option key={parserKey(option)} value={parserKey(option)}>
-                  {option.parser_name} · {option.parse_texts}/{option.parse_jobs}
+                  {describeParserOption(option)} · {option.parse_texts}/{option.parse_jobs}
                 </option>
               ))}
             </select>
+          </label>
+          <label className="checkbox-field field-best-only" title="Use the highest-priority parser output per file">
+            <input type="checkbox" checked={bestOnly} onChange={(event) => changeBestOnly(event.target.checked)} />
+            <span>Best parse only</span>
           </label>
           <label className="field field-code">
             <span>Code</span>
@@ -797,7 +879,7 @@ function App() {
                     disabled={!canOpenParse}
                     onClick={() => {
                       if (item.best_parse_job_id !== null) {
-                        setSelectedId(item.best_parse_job_id);
+                        selectParseJob(item.best_parse_job_id);
                       }
                     }}
                   >
@@ -826,7 +908,11 @@ function App() {
                       <span>{summarizeTimelineFiles(item)}</span>
                       <span>{summarizeTimelineParsers(item)}</span>
                     </div>
-                    {item.snippet ? <div className="timeline-snippet">{item.snippet}</div> : null}
+                    {item.snippet ? (
+                      <div className="timeline-snippet">
+                        {renderHighlightedText(item.snippet, appliedCriteria.textQuery)}
+                      </div>
+                    ) : null}
                   </button>
                 );
               })}
@@ -858,7 +944,7 @@ function App() {
                 role="button"
                 tabIndex={0}
                 aria-current={selectedId === result.parse_job_id ? "true" : undefined}
-                onClick={() => setSelectedId(result.parse_job_id)}
+                onClick={() => selectParseJob(result.parse_job_id)}
                 onKeyDown={(event) => selectResultFromKeyboard(event, result.parse_job_id)}
               >
                 <div className="result-line">
@@ -867,7 +953,7 @@ function App() {
                   <span className="code">{result.code}</span>
                   <span className="company">{result.company_name}</span>
                 </div>
-                <div className="result-title">{result.title}</div>
+                <div className="result-title">{renderHighlightedText(result.title, appliedCriteria.titleQuery)}</div>
                 {result.tags.length ? (
                   <div className="tag-chip-list">
                     {result.tags.map((tag) => (
@@ -881,7 +967,27 @@ function App() {
                     ))}
                   </div>
                 ) : null}
-                <div className="snippet">{result.snippet || "No snippet available."}</div>
+                <div className="snippet">
+                  {result.snippet ? renderHighlightedText(result.snippet, appliedCriteria.textQuery) : "No snippet available."}
+                </div>
+                {result.matched_pages.length ? (
+                  <div className="page-match-list" aria-label="Matched pages">
+                    {result.matched_pages.map((match) => (
+                      <button
+                        className="page-match-button"
+                        type="button"
+                        key={`${result.parse_job_id}:${match.page}`}
+                        title={match.snippet}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          selectParseJob(result.parse_job_id, match.page);
+                        }}
+                      >
+                        Page {match.page}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="result-meta">
                   <span>{result.parser_name}</span>
                   <span>{result.page_count}p</span>
@@ -917,7 +1023,7 @@ function App() {
             <>
               <div className="document-header">
                 <div>
-                  <div className="document-title">{detail.title}</div>
+                  <div className="document-title">{renderHighlightedText(detail.title, appliedCriteria.titleQuery)}</div>
                   <div className="document-meta">
                     <span>{detail.disclosure_date}</span>
                     <span>{detail.time}</span>
@@ -969,6 +1075,21 @@ function App() {
                 <span>
                   Page {selectedPage?.page ?? 1} of {Math.max(1, detail.pages.length)}
                 </span>
+                {selectedResult?.matched_pages.length ? (
+                  <div className="page-toolbar-matches" aria-label="Matched page jumps">
+                    {selectedResult.matched_pages.map((match) => (
+                      <button
+                        className={`page-match-button ${selectedPage?.page === match.page ? "selected" : ""}`}
+                        type="button"
+                        key={`${detail.parse_job_id}:${match.page}`}
+                        title={match.snippet}
+                        onClick={() => setPageIndex(pageIndexForPage(detail, match.page))}
+                      >
+                        Page {match.page}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <button
                   className="square-button"
                   type="button"
@@ -988,7 +1109,7 @@ function App() {
                   />
                 </div>
                 <div className="text-panel">
-                  <pre>{visibleText}</pre>
+                  <pre>{renderHighlightedText(visibleText, appliedCriteria.textQuery)}</pre>
                 </div>
               </div>
             </>
