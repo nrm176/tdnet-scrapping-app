@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Literal, Sequence
 
 from sqlalchemy import Select, and_, case, distinct, func, or_, select
@@ -19,6 +19,7 @@ from app.backend.schemas import (
     FinancialFactSourceResponse,
     FinancialFactSummaryResponse,
     FinancialMetricDeltaResponse,
+    ParseReviewDecisionResponse,
     ParsedPageMatchResponse,
     ParsedPageResponse,
     ParserFallbackCandidate,
@@ -45,6 +46,7 @@ from tdnet.orm import (
     DisclosureRecord,
     DocumentAnalysisResultRecord,
     DocumentParseJobRecord,
+    DocumentParseReviewRecord,
     DocumentParseTextRecord,
 )
 from tdnet.ixbrl_text import IXBRL_TEXT_PARSER_NAME, get_ixbrl_text_parser_version
@@ -58,6 +60,30 @@ PARSER_PRIORITY = {
     PARSER_NAME: 10,
 }
 LOW_TEXT_CHAR_THRESHOLD = 300
+REVIEW_STATES = ("needs_review", "accepted", "bad_parse", "prefer_ocr", "prefer_ixbrl")
+UNREVIEWED_REVIEW_STATE = "unreviewed"
+REVIEW_FILTER_STATES = REVIEW_STATES + (UNREVIEWED_REVIEW_STATE,)
+REVIEW_SELECTION_PRIORITY = {
+    "accepted": 40,
+    "prefer_ixbrl": 35,
+    "prefer_ocr": 30,
+    "needs_review": 0,
+    "bad_parse": -20,
+}
+
+
+def normalize_review_states(review_states: Sequence[str] | None) -> list[str]:
+    values: list[str] = []
+    for raw_value in review_states or []:
+        for part in raw_value.split(","):
+            value = part.strip().lower()
+            if not value:
+                continue
+            if value not in REVIEW_FILTER_STATES:
+                raise ValueError(f"Unsupported review_state: {value}")
+            if value not in values:
+                values.append(value)
+    return values
 
 
 def _escape_like(value: str) -> str:
@@ -153,25 +179,86 @@ def _parser_priority_expr(parse_job_model):
     )
 
 
-def _prefer_best_parse_per_file(stmt: Select) -> Select:
+def _review_priority(review_decision: ParseReviewDecisionResponse | None) -> int:
+    if review_decision is None:
+        return 0
+    return REVIEW_SELECTION_PRIORITY.get(review_decision.review_state, 0)
+
+
+def _review_filter_clauses(parse_job_model, review_states: Sequence[str] | None = None) -> list:
+    normalized_states = normalize_review_states(review_states)
+    if not normalized_states:
+        return []
+
+    review_exists = (
+        select(DocumentParseReviewRecord.id)
+        .where(DocumentParseReviewRecord.parse_job_id == parse_job_model.id)
+        .exists()
+    )
+    stored_states = [state for state in normalized_states if state != UNREVIEWED_REVIEW_STATE]
+    clauses = []
+    if stored_states:
+        clauses.append(
+            select(DocumentParseReviewRecord.id)
+            .where(DocumentParseReviewRecord.parse_job_id == parse_job_model.id)
+            .where(DocumentParseReviewRecord.review_state.in_(stored_states))
+            .exists()
+        )
+    if UNREVIEWED_REVIEW_STATE in normalized_states:
+        clauses.append(~review_exists)
+    return clauses
+
+
+def _prefer_best_parse_per_file(stmt: Select, *, review_states: Sequence[str] | None = None) -> Select:
     other_job = aliased(DocumentParseJobRecord)
     other_text = aliased(DocumentParseTextRecord)
+    current_review = aliased(DocumentParseReviewRecord)
+    other_review = aliased(DocumentParseReviewRecord)
+    current_review_priority = case(
+        *[(current_review.review_state == state, priority) for state, priority in REVIEW_SELECTION_PRIORITY.items()],
+        else_=0,
+    )
+    other_review_priority = case(
+        *[(other_review.review_state == state, priority) for state, priority in REVIEW_SELECTION_PRIORITY.items()],
+        else_=0,
+    )
     current_priority = _parser_priority_expr(DocumentParseJobRecord)
     other_priority = _parser_priority_expr(other_job)
-    better_parse_exists = (
+    better_parse_stmt = (
         select(other_job.id)
         .join(other_text, other_text.parse_job_id == other_job.id)
+        .outerjoin(other_review, other_review.parse_job_id == other_job.id)
+        .outerjoin(current_review, current_review.parse_job_id == DocumentParseJobRecord.id)
         .where(other_job.file_id == DocumentParseJobRecord.file_id)
         .where(other_job.parse_status == "completed")
         .where(
             or_(
-                other_priority > current_priority,
-                and_(other_priority == current_priority, other_job.id > DocumentParseJobRecord.id),
+                other_review_priority > current_review_priority,
+                and_(
+                    other_review_priority == current_review_priority,
+                    other_priority > current_priority,
+                ),
+                and_(
+                    other_review_priority == current_review_priority,
+                    other_priority == current_priority,
+                    other_job.id > DocumentParseJobRecord.id,
+                ),
             )
         )
-        .exists()
     )
+    for clause in _review_filter_clauses(other_job, review_states):
+        better_parse_stmt = better_parse_stmt.where(clause)
+    better_parse_exists = better_parse_stmt.exists()
     return stmt.where(~better_parse_exists)
+
+
+def _apply_review_state_filter(stmt: Select, review_states: Sequence[str] | None = None) -> Select:
+    clauses = _review_filter_clauses(DocumentParseJobRecord, review_states)
+    if not clauses:
+        return stmt
+    if len(clauses) == 1:
+        return stmt.where(clauses[0])
+    return stmt.where(or_(*clauses))
 
 
 def _apply_filters(
@@ -187,14 +274,16 @@ def _apply_filters(
     date_to: date | None = None,
     tags: Sequence[str] | None = None,
     tag_mode: TagMode = "any",
+    review_states: Sequence[str] | None = None,
     best_only: bool = True,
 ) -> Select:
     if parser_name:
         stmt = stmt.where(DocumentParseJobRecord.parser_name == parser_name)
     if parser_version:
         stmt = stmt.where(DocumentParseJobRecord.parser_version == parser_version)
+    stmt = _apply_review_state_filter(stmt, review_states)
     if best_only and not parser_name and not parser_version:
-        stmt = _prefer_best_parse_per_file(stmt)
+        stmt = _prefer_best_parse_per_file(stmt, review_states=review_states)
     if code:
         stmt = stmt.where(DisclosureRecord.code == code.strip().upper())
     if date_from:
@@ -434,6 +523,37 @@ async def _load_financial_facts(
     }
 
 
+def _review_record_to_response(record: DocumentParseReviewRecord) -> ParseReviewDecisionResponse:
+    return ParseReviewDecisionResponse(
+        id=record.id,
+        disclosure_id=record.disclosure_id,
+        parse_job_id=record.parse_job_id,
+        review_state=record.review_state,
+        reviewer=record.reviewer,
+        notes=record.notes,
+        reviewed_at=record.reviewed_at,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+async def _load_review_decisions(
+    session: AsyncSession,
+    parse_job_ids: Sequence[int],
+) -> dict[int, ParseReviewDecisionResponse]:
+    unique_ids = list(dict.fromkeys(parse_job_ids))
+    if not unique_ids:
+        return {}
+    records = (
+        await session.scalars(
+            select(DocumentParseReviewRecord)
+            .where(DocumentParseReviewRecord.parse_job_id.in_(unique_ids))
+            .order_by(DocumentParseReviewRecord.parse_job_id.asc())
+        )
+    ).all()
+    return {record.parse_job_id: _review_record_to_response(record) for record in records}
+
+
 def _row_to_result(
     parse_job: DocumentParseJobRecord,
     parse_text: DocumentParseTextRecord,
@@ -444,6 +564,7 @@ def _row_to_result(
     snippet_query: str | None = None,
     tags: list[ReportTagAssignmentResponse] | None = None,
     financial_facts: FinancialFactsAnalysisResponse | None = None,
+    review_decision: ParseReviewDecisionResponse | None = None,
 ) -> ParseSearchResult:
     return ParseSearchResult(
         parse_job_id=parse_job.id,
@@ -463,6 +584,7 @@ def _row_to_result(
         tags=tags or [],
         matched_pages=_find_page_matches(parse_text.pages_json, snippet_query or query),
         financial_facts=financial_facts,
+        review_decision=review_decision,
     )
 
 
@@ -473,6 +595,8 @@ def _timeline_parse_matches(
     parser_name: str | None = None,
     parser_version: str | None = None,
     text_query: str | None = None,
+    review_states: Sequence[str] | None = None,
+    review_decisions: dict[int, ParseReviewDecisionResponse] | None = None,
 ) -> bool:
     if parse_job.parse_status != "completed" or parse_text is None:
         return False
@@ -482,6 +606,12 @@ def _timeline_parse_matches(
         return False
     if text_query and text_query.lower() not in parse_text.content_text.lower():
         return False
+    normalized_states = normalize_review_states(review_states)
+    if normalized_states:
+        decision = (review_decisions or {}).get(parse_job.id)
+        if decision is None:
+            return UNREVIEWED_REVIEW_STATE in normalized_states
+        return decision.review_state in normalized_states
     return True
 
 
@@ -491,6 +621,8 @@ def _select_timeline_snippet(
     parser_name: str | None = None,
     parser_version: str | None = None,
     text_query: str | None = None,
+    review_states: Sequence[str] | None = None,
+    review_decisions: dict[int, ParseReviewDecisionResponse] | None = None,
 ) -> tuple[int | None, str]:
     candidates = [
         (parse_job, parse_text)
@@ -501,9 +633,11 @@ def _select_timeline_snippet(
             parser_name=parser_name,
             parser_version=parser_version,
             text_query=text_query,
+            review_states=review_states,
+            review_decisions=review_decisions,
         )
     ]
-    if not candidates and not parser_name and not parser_version and not text_query:
+    if not candidates and not parser_name and not parser_version and not text_query and not review_states:
         candidates = [
             (parse_job, parse_text)
             for parse_job, parse_text in rows
@@ -514,6 +648,7 @@ def _select_timeline_snippet(
 
     candidates.sort(
         key=lambda row: (
+            _review_priority((review_decisions or {}).get(row[0].id)),
             PARSER_PRIORITY.get(row[0].parser_name, 0),
             row[0].id,
         ),
@@ -740,6 +875,7 @@ async def search_parse_texts(
     date_to: date | None = None,
     tags: Sequence[str] | None = None,
     tag_mode: TagMode = "any",
+    review_states: Sequence[str] | None = None,
     best_only: bool = True,
     limit: int = 25,
     offset: int = 0,
@@ -759,6 +895,7 @@ async def search_parse_texts(
         date_to=date_to,
         tags=tags,
         tag_mode=tag_mode,
+        review_states=review_states,
         best_only=best_only,
     )
     count_stmt = filtered.with_only_columns(func.count()).order_by(None)
@@ -778,6 +915,7 @@ async def search_parse_texts(
     parse_job_ids = [parse_job.id for parse_job, _, _, _ in rows]
     tag_map = await list_tag_assignments_for_disclosures(session, disclosure_ids)
     financial_fact_map = await _load_financial_facts(session, parse_job_ids)
+    review_decision_map = await _load_review_decisions(session, parse_job_ids)
     return ParseSearchResponse(
         query=normalized_query,
         total=total,
@@ -793,6 +931,7 @@ async def search_parse_texts(
                 snippet_query=normalized_text_query,
                 tags=_tag_views_to_response(tag_map.get(disclosure.id, [])),
                 financial_facts=financial_fact_map.get(parse_job.id),
+                review_decision=review_decision_map.get(parse_job.id),
             )
             for parse_job, parse_text, file_record, disclosure in rows
         ],
@@ -811,6 +950,7 @@ async def get_company_timeline(
     date_to: date | None = None,
     tags: Sequence[str] | None = None,
     tag_mode: TagMode = "any",
+    review_states: Sequence[str] | None = None,
     best_only: bool = True,
     order: Literal["asc", "desc"] = "desc",
     limit: int = 50,
@@ -831,7 +971,8 @@ async def get_company_timeline(
         )
     disclosure_stmt = _apply_disclosure_tag_filters(disclosure_stmt, tags=tags, tag_mode=tag_mode)
 
-    if normalized_text_query or parser_name or parser_version:
+    normalized_review_states = normalize_review_states(review_states)
+    if normalized_text_query or parser_name or parser_version or normalized_review_states:
         parse_filter = _apply_filters(
             _base_join(),
             title_query=normalized_title_query,
@@ -843,6 +984,7 @@ async def get_company_timeline(
             date_to=date_to,
             tags=tags,
             tag_mode=tag_mode,
+            review_states=normalized_review_states,
             best_only=best_only,
         )
         matching_disclosure_ids = parse_filter.with_only_columns(DisclosureRecord.id).distinct().subquery()
@@ -913,6 +1055,7 @@ async def get_company_timeline(
         defaultdict(list)
     )
     financial_fact_map: dict[int, FinancialFactsAnalysisResponse] = {}
+    review_decision_map: dict[int, ParseReviewDecisionResponse] = {}
     if file_disclosure_ids:
         parse_rows = (
             await session.execute(
@@ -930,7 +1073,9 @@ async def get_company_timeline(
             disclosure_id = file_disclosure_ids.get(parse_job.file_id)
             if disclosure_id is not None:
                 parse_rows_by_disclosure[disclosure_id].append((parse_job, parse_text))
-        financial_fact_map = await _load_financial_facts(session, [parse_job.id for parse_job, _ in parse_rows])
+        parse_job_ids = [parse_job.id for parse_job, _ in parse_rows]
+        financial_fact_map = await _load_financial_facts(session, parse_job_ids)
+        review_decision_map = await _load_review_decisions(session, parse_job_ids)
 
     results: list[CompanyTimelineDisclosureResponse] = []
     for disclosure in disclosures:
@@ -940,6 +1085,8 @@ async def get_company_timeline(
             parser_name=parser_name,
             parser_version=parser_version,
             text_query=normalized_text_query,
+            review_states=normalized_review_states,
+            review_decisions=review_decision_map,
         )
         results.append(
             CompanyTimelineDisclosureResponse(
@@ -977,11 +1124,13 @@ async def get_company_timeline(
                         has_text=parse_text is not None,
                         last_parse_error=parse_job.last_parse_error,
                         financial_facts=financial_fact_map.get(parse_job.id),
+                        review_decision=review_decision_map.get(parse_job.id),
                     )
                     for parse_job, parse_text in parse_rows
                 ],
                 best_parse_job_id=best_parse_job_id,
                 financial_facts=financial_fact_map.get(best_parse_job_id) if best_parse_job_id is not None else None,
+                review_decision=review_decision_map.get(best_parse_job_id) if best_parse_job_id is not None else None,
                 snippet=snippet,
             )
         )
@@ -1009,6 +1158,7 @@ async def list_report_calendar_days(
     code: str | None = None,
     tags: Sequence[str] | None = None,
     tag_mode: TagMode = "any",
+    review_states: Sequence[str] | None = None,
     best_only: bool = True,
 ) -> list[ReportCalendarDay]:
     record_stmt = (
@@ -1046,6 +1196,7 @@ async def list_report_calendar_days(
         date_to=month_end,
         tags=tags,
         tag_mode=tag_mode,
+        review_states=review_states,
         best_only=best_only,
     )
     stmt = (
@@ -1081,6 +1232,7 @@ async def get_parse_job_detail(
     parse_job, parse_text, file_record, disclosure = row
     tag_map = await list_tag_assignments_for_disclosures(session, [disclosure.id])
     financial_fact_map = await _load_financial_facts(session, [parse_job.id], include_facts=True)
+    review_decision_map = await _load_review_decisions(session, [parse_job.id])
     base = _row_to_result(
         parse_job,
         parse_text,
@@ -1089,6 +1241,7 @@ async def get_parse_job_detail(
         query=None,
         tags=_tag_views_to_response(tag_map.get(disclosure.id, [])),
         financial_facts=financial_fact_map.get(parse_job.id),
+        review_decision=review_decision_map.get(parse_job.id),
     )
     return ParseJobDetailResponse(
         **base.model_dump(),
@@ -1098,3 +1251,48 @@ async def get_parse_job_detail(
         content_text=parse_text.content_text,
         pages=_extract_pages(parse_text.pages_json),
     )
+
+
+async def upsert_parse_job_review(
+    session: AsyncSession,
+    *,
+    parse_job_id: int,
+    review_state: str,
+    notes: str = "",
+    reviewer: str | None = None,
+) -> ParseReviewDecisionResponse | None:
+    normalized_states = normalize_review_states([review_state])
+    if len(normalized_states) != 1 or normalized_states[0] == UNREVIEWED_REVIEW_STATE:
+        raise ValueError(f"Unsupported review_state: {review_state}")
+
+    row = (
+        await session.execute(
+            select(DocumentParseJobRecord, DisclosureFileRecord)
+            .join(DisclosureFileRecord, DocumentParseJobRecord.file_id == DisclosureFileRecord.id)
+            .where(DocumentParseJobRecord.id == parse_job_id)
+        )
+    ).first()
+    if row is None:
+        return None
+    _parse_job, file_record = row
+    clean_reviewer = reviewer.strip() if reviewer and reviewer.strip() else None
+    clean_notes = notes.strip() if notes else ""
+
+    record = await session.scalar(
+        select(DocumentParseReviewRecord).where(DocumentParseReviewRecord.parse_job_id == parse_job_id)
+    )
+    if record is None:
+        record = DocumentParseReviewRecord(
+            disclosure_id=file_record.disclosure_id,
+            parse_job_id=parse_job_id,
+        )
+        session.add(record)
+
+    record.disclosure_id = file_record.disclosure_id
+    record.review_state = normalized_states[0]
+    record.reviewer = clean_reviewer
+    record.notes = clean_notes
+    record.reviewed_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(record)
+    return _review_record_to_response(record)

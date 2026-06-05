@@ -146,6 +146,22 @@ export type FinancialFactsAnalysis = {
   metric_deltas: FinancialMetricDelta[];
 };
 
+export type ReviewState = "needs_review" | "accepted" | "bad_parse" | "prefer_ocr" | "prefer_ixbrl";
+
+export type ReviewStateFilter = ReviewState | "unreviewed";
+
+export type ParseReviewDecision = {
+  id: number;
+  disclosure_id: string;
+  parse_job_id: number;
+  review_state: ReviewState;
+  reviewer: string | null;
+  notes: string;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CompanyTimelineFile = {
   file_id: number;
   file_type: string;
@@ -169,6 +185,7 @@ export type CompanyTimelineParser = {
   has_text: boolean;
   last_parse_error: string | null;
   financial_facts: FinancialFactsAnalysis | null;
+  review_decision: ParseReviewDecision | null;
 };
 
 export type CompanyTimelineDisclosure = {
@@ -184,6 +201,7 @@ export type CompanyTimelineDisclosure = {
   parsers: CompanyTimelineParser[];
   best_parse_job_id: number | null;
   financial_facts: FinancialFactsAnalysis | null;
+  review_decision: ParseReviewDecision | null;
   snippet: string;
 };
 
@@ -214,6 +232,7 @@ export type ParseSearchResult = {
   tags: ReportTagAssignment[];
   matched_pages: ParsedPageMatch[];
   financial_facts: FinancialFactsAnalysis | null;
+  review_decision: ParseReviewDecision | null;
 };
 
 export type ParseSearchResponse = {

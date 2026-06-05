@@ -12,6 +12,8 @@ erDiagram
   TDNET_DISCLOSURES ||--o{ DISCLOSURE_FILES : has
   DISCLOSURE_FILES ||--o{ DOCUMENT_PARSE_JOBS : parsed_by
   DOCUMENT_PARSE_JOBS ||--o| DOCUMENT_PARSE_TEXTS : persists
+  TDNET_DISCLOSURES ||--o{ DOCUMENT_PARSE_REVIEWS : reviewed_as
+  DOCUMENT_PARSE_JOBS ||--o| DOCUMENT_PARSE_REVIEWS : manual_decision
   DISCLOSURE_FILES ||--o{ DOCUMENT_ANALYSIS_RESULTS : analyzed_as
   DOCUMENT_PARSE_JOBS |o--o{ DOCUMENT_ANALYSIS_RESULTS : parse_lineage
   TDNET_DISCLOSURES ||--o{ TDNET_REPORT_TAG_ASSIGNMENTS : tagged_with
@@ -81,6 +83,18 @@ erDiagram
     timestamptz updated_at
   }
 
+  DOCUMENT_PARSE_REVIEWS {
+    int id PK
+    string disclosure_id FK
+    int parse_job_id FK
+    string review_state
+    string reviewer
+    text notes
+    timestamptz reviewed_at
+    timestamptz created_at
+    timestamptz updated_at
+  }
+
   DOCUMENT_ANALYSIS_RESULTS {
     int id PK
     int file_id FK
@@ -133,6 +147,7 @@ erDiagram
 | `disclosure_files` | One row per source artifact type for a disclosure, currently PDF or XBRL. Tracks source URL, expected local path, hash, size, download status, attempts, and errors. |
 | `document_parse_jobs` | One row per file and parser identity. Tracks parser name/version, status, attempts, text artifact path, hash, parse time, and errors. |
 | `document_parse_texts` | Searchable text cache for completed parse jobs. Stores normalized full text plus page-level JSON used by search/detail views. |
+| `document_parse_reviews` | Latest manual review decision for a parse job. Stores review state, reviewer, notes, and timestamps without deleting parser outputs. |
 | `document_analysis_results` | Downstream analysis outputs such as deterministic financial facts. Keeps analyzer lineage separate from download and parse state. |
 | `tdnet_report_tags` | Deterministic report tag taxonomy. |
 | `tdnet_report_tag_assignments` | Disclosure-level tag assignments with optional file/parse-job evidence lineage. |
@@ -143,6 +158,7 @@ erDiagram
 - `disclosure_files` is unique on `(disclosure_id, file_type)`, so each disclosure has at most one row per source artifact type.
 - `document_parse_jobs` is unique on `(file_id, parser_name, parser_version)`, so reruns update or skip the same parser identity instead of creating duplicates.
 - `document_parse_texts.parse_job_id` is unique, giving each parse job at most one searchable text cache row.
+- `document_parse_reviews.parse_job_id` is unique, giving each parse job at most one current manual review decision.
 - `tdnet_report_tag_assignments` is unique on `(disclosure_id, tag_slug)`, so each tag appears at most once per disclosure.
 
 ## Processing Lineage
@@ -154,6 +170,7 @@ tdnet_disclosures
   -> disclosure_files
   -> document_parse_jobs
   -> document_parse_texts
+  -> document_parse_reviews
 ```
 
 Downstream analysis and tagging keep their own lineage:
@@ -167,6 +184,13 @@ This separation lets parser history, searchable text, tagging, and later
 business analysis evolve independently. `tdnet analyze-financials` writes
 structured financial fact payloads here using `file_id` and `parse_job_id`
 lineage back to the parsed disclosure text.
+
+Manual review state is stored in `document_parse_reviews` with one row per
+parse job. Supported review states are `needs_review`, `accepted`,
+`bad_parse`, `prefer_ocr`, and `prefer_ixbrl`; the review API also supports an
+`unreviewed` filter for parse jobs with no review row. Review decisions are
+used by the review app filters and can influence best-parser selection, but
+they do not modify or delete parser artifacts.
 
 ## Parser Identities
 

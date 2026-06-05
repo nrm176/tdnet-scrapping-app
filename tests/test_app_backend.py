@@ -14,6 +14,7 @@ from app.backend.services.search_service import (
     list_report_calendar_days,
     list_report_tags,
     search_parse_texts,
+    upsert_parse_job_review,
 )
 from tdnet.financial_facts import FINANCIAL_FACTS_ANALYSIS_TYPE, FINANCIAL_FACTS_ANALYZER_NAME, extract_financial_facts
 from tdnet.models import TdnetDisclosure
@@ -113,6 +114,13 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
             parser_version="ocr-version",
             limit=10,
         )
+        review_decision = await upsert_parse_job_review(
+            session,
+            parse_job_id=parse_job.id,
+            review_state="accepted",
+            reviewer="qa",
+            notes="looks good",
+        )
 
         options = await list_parser_options(session)
         response = await search_parse_texts(session, query="18,000", parser_name="apple-vision-ocr")
@@ -147,12 +155,29 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
             parser_name="apple-vision-ocr",
             tags=["share_buyback"],
         )
+        accepted_response = await search_parse_texts(
+            session,
+            parser_name="apple-vision-ocr",
+            review_states=["accepted"],
+        )
+        unreviewed_response = await search_parse_texts(
+            session,
+            parser_name="apple-vision-ocr",
+            review_states=["unreviewed"],
+        )
         calendar_days = await list_report_calendar_days(
             session,
             month_start=date(2026, 4, 1),
             month_end=date(2026, 4, 30),
             parser_name="apple-vision-ocr",
             tags=["forecast_revision"],
+        )
+        reviewed_calendar_days = await list_report_calendar_days(
+            session,
+            month_start=date(2026, 4, 1),
+            month_end=date(2026, 4, 30),
+            parser_name="apple-vision-ocr",
+            review_states=["accepted"],
         )
         tag_options = await list_report_tags(session)
         detail = await get_parse_job_detail(session, parse_job.id)
@@ -173,10 +198,20 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
     assert tagged_response.total == 1
     assert tagged_response.results[0].tags[0].slug == "forecast_revision"
     assert missing_tag_response.total == 0
+    assert review_decision is not None
+    assert review_decision.review_state == "accepted"
+    assert review_decision.reviewer == "qa"
+    assert accepted_response.total == 1
+    assert accepted_response.results[0].review_decision is not None
+    assert accepted_response.results[0].review_decision.notes == "looks good"
+    assert unreviewed_response.total == 0
     assert calendar_days[0].record_count == 1
     assert calendar_days[0].report_count == 1
+    assert reviewed_calendar_days[0].report_count == 1
     assert any(tag.slug == "forecast_revision" and tag.assignment_count == 1 for tag in tag_options)
     assert detail is not None
+    assert detail.review_decision is not None
+    assert detail.review_decision.review_state == "accepted"
     assert detail.tags[0].slug == "forecast_revision"
     assert detail.financial_facts is not None
     assert detail.financial_facts.status == "completed"
@@ -308,6 +343,13 @@ async def test_company_timeline_includes_lineage_and_filters(tmp_path):
             parser_version="ocr-version",
             limit=10,
         )
+        await upsert_parse_job_review(
+            session,
+            parse_job_id=parse_job.id,
+            review_state="accepted",
+            reviewer="qa",
+            notes="timeline approved",
+        )
 
         timeline = await get_company_timeline(session, code="85600")
         text_filtered = await get_company_timeline(
@@ -326,6 +368,16 @@ async def test_company_timeline_includes_lineage_and_filters(tmp_path):
             code="85600",
             tags=["forecast_revision"],
         )
+        review_filtered = await get_company_timeline(
+            session,
+            code="85600",
+            review_states=["accepted"],
+        )
+        unreviewed_filtered = await get_company_timeline(
+            session,
+            code="85600",
+            review_states=["unreviewed"],
+        )
 
     assert timeline.code == "85600"
     assert timeline.company_name == "宮崎太銀"
@@ -337,6 +389,10 @@ async def test_company_timeline_includes_lineage_and_filters(tmp_path):
     assert parsed_item.parsers[0].parser_name == "apple-vision-ocr"
     assert parsed_item.parsers[0].has_text is True
     assert parsed_item.financial_facts is None
+    assert parsed_item.review_decision is not None
+    assert parsed_item.review_decision.review_state == "accepted"
+    assert parsed_item.parsers[0].review_decision is not None
+    assert parsed_item.parsers[0].review_decision.notes == "timeline approved"
     assert parsed_item.tags[0].slug == "forecast_revision"
     assert "18,000" in parsed_item.snippet
 
@@ -356,6 +412,9 @@ async def test_company_timeline_includes_lineage_and_filters(tmp_path):
     assert date_filtered.results[0].disclosure_id == disclosures[1].id
     assert tag_filtered.total == 1
     assert tag_filtered.results[0].disclosure_id == disclosures[0].id
+    assert review_filtered.total == 1
+    assert review_filtered.results[0].disclosure_id == disclosures[0].id
+    assert unreviewed_filtered.total == 0
     await engine.dispose()
 
 
@@ -401,6 +460,7 @@ async def test_search_parse_texts_prefers_best_parser_by_default(tmp_path):
             content_type="application/pdf",
         )
 
+        parse_jobs: dict[str, DocumentParseJobRecord] = {}
         for parser_name, parser_version, text in [
             (PARSER_NAME, "source-version", "garbled-token \x01\x02\x03J®XG}uvªLMc\x89§\x9a\n"),
             (IXBRL_TEXT_PARSER_NAME, "ixbrl-version", "通期業績予想の修正に関するお知らせ\n今回修正予想 28,000\n"),
@@ -416,6 +476,7 @@ async def test_search_parse_texts_prefers_best_parser_by_default(tmp_path):
             session.add(parse_job)
             await session.commit()
             await session.refresh(parse_job)
+            parse_jobs[parser_name] = parse_job
             await upsert_parse_text(
                 session,
                 parse_job=parse_job,
@@ -438,6 +499,15 @@ async def test_search_parse_texts_prefers_best_parser_by_default(tmp_path):
             text_query="garbled-token",
             parser_name=PARSER_NAME,
         )
+        await upsert_parse_job_review(
+            session,
+            parse_job_id=parse_jobs[PARSER_NAME].id,
+            review_state="accepted",
+            reviewer="qa",
+            notes="manual preference",
+        )
+        review_preferred_response = await search_parse_texts(session)
+        accepted_filtered_response = await search_parse_texts(session, review_states=["accepted"])
 
     assert default_response.total == 1
     assert default_response.results[0].parser_name == IXBRL_TEXT_PARSER_NAME
@@ -448,6 +518,12 @@ async def test_search_parse_texts_prefers_best_parser_by_default(tmp_path):
     assert all_parser_response.results[0].parser_name == PARSER_NAME
     assert explicit_pymupdf_response.total == 1
     assert explicit_pymupdf_response.results[0].parser_name == PARSER_NAME
+    assert review_preferred_response.total == 1
+    assert review_preferred_response.results[0].parser_name == PARSER_NAME
+    assert review_preferred_response.results[0].review_decision is not None
+    assert review_preferred_response.results[0].review_decision.review_state == "accepted"
+    assert accepted_filtered_response.total == 1
+    assert accepted_filtered_response.results[0].parser_name == PARSER_NAME
     await engine.dispose()
 
 

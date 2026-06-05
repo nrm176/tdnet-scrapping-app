@@ -47,6 +47,10 @@ class DisclosureRecord(Base):
         back_populates="disclosure",
         cascade="all, delete-orphan",
     )
+    parse_reviews: Mapped[list["DocumentParseReviewRecord"]] = relationship(
+        back_populates="disclosure",
+        cascade="all, delete-orphan",
+    )
     tag_assignments: Mapped[list["ReportTagAssignmentRecord"]] = relationship(
         back_populates="disclosure",
         cascade="all, delete-orphan",
@@ -145,6 +149,10 @@ class DocumentParseJobRecord(Base):
         back_populates="parse_job",
         cascade="all, delete-orphan",
     )
+    review_decision: Mapped["DocumentParseReviewRecord | None"] = relationship(
+        back_populates="parse_job",
+        cascade="all, delete-orphan",
+    )
     tag_assignments: Mapped[list["ReportTagAssignmentRecord"]] = relationship(
         back_populates="parse_job",
     )
@@ -181,6 +189,45 @@ class DocumentParseTextRecord(Base):
     )
 
     parse_job: Mapped[DocumentParseJobRecord] = relationship(back_populates="parse_text")
+
+
+class DocumentParseReviewRecord(Base):
+    __tablename__ = "document_parse_reviews"
+    __table_args__ = (
+        UniqueConstraint("parse_job_id", name="uq_document_parse_reviews_parse_job"),
+        Index("ix_document_parse_reviews_state", "review_state"),
+        Index("ix_document_parse_reviews_disclosure_state", "disclosure_id", "review_state"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    disclosure_id: Mapped[str] = mapped_column(
+        ForeignKey("tdnet_disclosures.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    parse_job_id: Mapped[int] = mapped_column(
+        ForeignKey("document_parse_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    review_state: Mapped[str] = mapped_column(String(32), nullable=False, default="needs_review", index=True)
+    reviewer: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    disclosure: Mapped[DisclosureRecord] = relationship(back_populates="parse_reviews")
+    parse_job: Mapped[DocumentParseJobRecord] = relationship(back_populates="review_decision")
 
 
 class DocumentAnalysisResultRecord(Base):
