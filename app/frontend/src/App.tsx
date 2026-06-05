@@ -30,6 +30,7 @@ import type {
   FinancialFact,
   FinancialFactsAnalysis,
   FinancialFactValue,
+  FinancialMetricDelta,
   ParseJobDetail,
   ParseSearchResult,
   ParserOption,
@@ -185,6 +186,15 @@ const ROW_KIND_LABELS: Record<string, string> = {
   previous_forecast: "Previous",
 };
 
+const COMPARISON_BASIS_LABELS: Record<string, string> = {
+  actual_vs_forecast: "actual vs forecast",
+  previous_forecast: "previous forecast",
+  prior_year_comparable_period: "prior comparable",
+  prior_year_full_year: "prior full year",
+  prior_year_same_quarter: "prior same quarter",
+  unknown_comparison: "comparison",
+};
+
 function formatMetricKey(value: string | null | undefined): string {
   if (!value) {
     return "Metric";
@@ -204,7 +214,7 @@ function financialFactStatusClass(analysis: FinancialFactsAnalysis | null): stri
     return "empty";
   }
   if (analysis.status === "completed") {
-    return analysis.summary.fact_count > 0 ? "completed" : "empty";
+    return analysis.summary.fact_count > 0 || analysis.summary.metric_delta_count > 0 ? "completed" : "empty";
   }
   if (analysis.status === "failed") {
     return "failed";
@@ -216,12 +226,64 @@ function financialFactBadgeText(analysis: FinancialFactsAnalysis): string {
   if (analysis.status !== "completed") {
     return `Facts ${analysis.status}`;
   }
+  if (analysis.summary.metric_delta_count > 0) {
+    return `Deltas ${formatNumber(analysis.summary.metric_delta_count)} · Facts ${formatNumber(analysis.summary.fact_count)}`;
+  }
   if (analysis.summary.fact_count === 0) {
     return "Facts 0";
   }
   return analysis.summary.has_forecast_revision
     ? `Facts ${formatNumber(analysis.summary.fact_count)} · Forecast revision`
     : `Facts ${formatNumber(analysis.summary.fact_count)}`;
+}
+
+function formatDecimalNumber(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function formatDeltaValue(value: number | null | undefined, raw?: string | null): string {
+  if (raw) {
+    return raw;
+  }
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  return formatDecimalNumber(value);
+}
+
+function formatSignedDelta(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  const formatted = formatDecimalNumber(Math.abs(value));
+  if (value > 0) {
+    return `+${formatted}`;
+  }
+  if (value < 0) {
+    return `-${formatted}`;
+  }
+  return formatted;
+}
+
+function formatDeltaPercent(delta: FinancialMetricDelta): string {
+  const value = delta.reported_change_pct ?? delta.computed_change_pct;
+  if (value === null || value === undefined) {
+    return "-";
+  }
+  return `${formatSignedDelta(value)}%`;
+}
+
+function deltaToneClass(value: number | null | undefined): string {
+  if (value === null || value === undefined || value === 0) {
+    return "delta-flat";
+  }
+  return value > 0 ? "delta-positive" : "delta-negative";
+}
+
+function comparisonBasisLabel(delta: FinancialMetricDelta): string {
+  return COMPARISON_BASIS_LABELS[delta.comparison_basis ?? ""] ?? (delta.comparison_basis || "comparison");
 }
 
 function formatFactValue(value: FinancialFactValue): string {
@@ -239,11 +301,60 @@ function summarizeFactValues(fact: FinancialFact): string {
   return fact.values.slice(0, 5).map(formatFactValue).join(" · ");
 }
 
-function sourceLabel(fact: FinancialFact): string {
-  if (!fact.source) {
+function sourceText(source: { line_index: number | null; text: string } | null): string {
+  if (!source) {
     return "";
   }
-  return fact.source.line_index ? `Line ${fact.source.line_index}: ${fact.source.text}` : fact.source.text;
+  return source.line_index ? `Line ${source.line_index}: ${source.text}` : source.text;
+}
+
+function sourceLabel(fact: FinancialFact): string {
+  return sourceText(fact.source);
+}
+
+function renderMetricDeltaTable(deltas: FinancialMetricDelta[]): ReactNode {
+  if (!deltas.length) {
+    return null;
+  }
+  return (
+    <div className="metric-delta-table" aria-label="Financial metric deltas">
+      <div className="metric-delta-head" aria-hidden="true">
+        <span>Metric</span>
+        <span>Current</span>
+        <span>Compare</span>
+        <span>Change</span>
+        <span>Change %</span>
+        <span>Basis</span>
+      </div>
+      {deltas.slice(0, 8).map((delta, index) => {
+        const changeClass = deltaToneClass(delta.change_value);
+        const percentValue = delta.reported_change_pct ?? delta.computed_change_pct;
+        return (
+          <div className="metric-delta-row" key={`${delta.metric ?? "metric"}-${index}`}>
+            <strong className="metric-delta-cell metric-label" data-label="Metric">
+              {delta.metric_label_ja || formatMetricKey(delta.metric)}
+            </strong>
+            <span className="metric-delta-cell number" data-label="Current">
+              {formatDeltaValue(delta.current_value, delta.current_raw)}
+            </span>
+            <span className="metric-delta-cell number" data-label="Compare">
+              {formatDeltaValue(delta.comparison_value, delta.comparison_raw)}
+            </span>
+            <span className={`metric-delta-cell number delta-value ${changeClass}`} data-label="Change">
+              {formatSignedDelta(delta.change_value)}
+            </span>
+            <span className={`metric-delta-cell number delta-value ${deltaToneClass(percentValue)}`} data-label="Change %">
+              {formatDeltaPercent(delta)}
+              {delta.change_pct_source ? <small>{delta.change_pct_source}</small> : null}
+            </span>
+            <span className="metric-delta-cell basis" data-label="Basis" title={delta.period ?? undefined}>
+              {comparisonBasisLabel(delta)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function renderFinancialFactsBadge(analysis: FinancialFactsAnalysis | null): ReactNode {
@@ -262,9 +373,18 @@ function renderFinancialFactsBadge(analysis: FinancialFactsAnalysis | null): Rea
 
 function renderFinancialFactsPanel(analysis: FinancialFactsAnalysis | null): ReactNode {
   const statusClass = financialFactStatusClass(analysis);
+  const metricDeltas = analysis?.metric_deltas ?? [];
   const forecastFacts = analysis?.facts.filter((fact) => fact.type === "forecast_revision_row") ?? [];
   const metricFacts = analysis?.facts.filter((fact) => fact.type === "metric_row") ?? [];
   const sourceFacts = (analysis?.facts ?? []).filter((fact) => fact.source).slice(0, 3);
+  const deltaSourceLabels = metricDeltas
+    .map((delta) => sourceText(delta.source))
+    .filter((label) => label.length > 0)
+    .filter((label, index, labels) => labels.indexOf(label) === index)
+    .slice(0, 3);
+  const sourceLabels = metricDeltas.length ? deltaSourceLabels : sourceFacts.map(sourceLabel).filter(Boolean);
+  const hasCompletedContent =
+    analysis?.status === "completed" && (analysis.summary.fact_count > 0 || metricDeltas.length > 0);
 
   return (
     <section className={`facts-panel ${statusClass}`} aria-label="Financial facts">
@@ -281,6 +401,9 @@ function renderFinancialFactsPanel(analysis: FinancialFactsAnalysis | null): Rea
           {analysis ? (
             <>
               <span className={`fact-chip ${statusClass}`}>{financialFactBadgeText(analysis)}</span>
+              {analysis.summary.metric_delta_count > 0 ? (
+                <span className="fact-chip">Deltas {formatNumber(analysis.summary.metric_delta_count)}</span>
+              ) : null}
               <span className="fact-chip">Forecast rows {formatNumber(analysis.summary.forecast_revision_rows)}</span>
               {analysis.summary.metric_keys.slice(0, 4).map((metric) => (
                 <span className="fact-chip" key={metric}>
@@ -302,9 +425,10 @@ function renderFinancialFactsPanel(analysis: FinancialFactsAnalysis | null): Rea
         <div className="facts-message">Analysis is {analysis.status}.</div>
       ) : null}
 
-      {analysis?.status === "completed" && analysis.summary.fact_count > 0 ? (
+      {hasCompletedContent ? (
         <div className="facts-body">
-          {forecastFacts.length ? (
+          {renderMetricDeltaTable(metricDeltas)}
+          {!metricDeltas.length && forecastFacts.length ? (
             <div className="facts-table" aria-label="Forecast revision facts">
               {forecastFacts.slice(0, 5).map((fact, index) => (
                 <div className="facts-row" key={`forecast-${index}`}>
@@ -314,7 +438,7 @@ function renderFinancialFactsPanel(analysis: FinancialFactsAnalysis | null): Rea
               ))}
             </div>
           ) : null}
-          {metricFacts.length ? (
+          {!metricDeltas.length && metricFacts.length ? (
             <div className="facts-table compact" aria-label="Metric facts">
               {metricFacts.slice(0, 4).map((fact, index) => (
                 <div className="facts-row" key={`metric-${index}`}>
@@ -324,10 +448,10 @@ function renderFinancialFactsPanel(analysis: FinancialFactsAnalysis | null): Rea
               ))}
             </div>
           ) : null}
-          {sourceFacts.length ? (
+          {sourceLabels.length ? (
             <div className="facts-sources" aria-label="Financial fact source lines">
-              {sourceFacts.map((fact, index) => (
-                <span key={`source-${index}`}>{sourceLabel(fact)}</span>
+              {sourceLabels.map((label, index) => (
+                <span key={`source-${index}`}>{label}</span>
               ))}
             </div>
           ) : null}

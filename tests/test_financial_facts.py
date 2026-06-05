@@ -49,6 +49,12 @@ TDNET_RESULT_TABLE_TEXT = """
 3.セグメント利益は、四半期連結損益計算書の営業利益と調整を行っております。
 """
 
+UNEVEN_TABLE_TEXT = """
+|Col1|売上高|
+|---|---|
+|2026年７月期第３四半期<br>2025年７月期第３四半期|百万円<br>31,107<br>28,441|％<br>9.4<br>13.3|
+"""
+
 
 def test_extract_financial_facts_finds_metrics_and_forecast_rows():
     result = extract_financial_facts(
@@ -60,16 +66,26 @@ def test_extract_financial_facts_finds_metrics_and_forecast_rows():
     )
 
     facts = result["facts"]
+    metric_deltas = result["metric_deltas"]
     summary = result["summary"]
     forecast_rows = [fact for fact in facts if fact["type"] == "forecast_revision_row"]
     metric_rows = [fact for fact in facts if fact["type"] == "metric_row"]
+    deltas_by_metric = {delta["metric"]: delta for delta in metric_deltas}
 
     assert summary["has_forecast_revision"] is True
+    assert summary["metric_delta_count"] == 5
     assert set(summary["metric_keys"]) >= {"eps", "dividend_per_share"}
     assert len(forecast_rows) == 4
     assert forecast_rows[0]["values"][0]["metric"] == "net_sales"
     assert forecast_rows[0]["values"][0]["value"] == 18000
     assert forecast_rows[-1]["values"][0]["unit"] == "percent"
+    assert deltas_by_metric["net_sales"]["comparison_basis"] == "previous_forecast"
+    assert deltas_by_metric["net_sales"]["current_value"] == 18000
+    assert deltas_by_metric["net_sales"]["comparison_value"] == 16500
+    assert deltas_by_metric["net_sales"]["change_value"] == 1500
+    assert deltas_by_metric["net_sales"]["reported_change_pct"] == 9.1
+    assert deltas_by_metric["net_sales"]["computed_change_pct"] == pytest.approx(9.09)
+    assert deltas_by_metric["net_sales"]["change_pct_source"] == "reported"
     assert any(fact["metric"] == "dividend_per_share" and fact["values"][0]["value"] == 40.0 for fact in metric_rows)
     assert result["document"]["code"] == "12345"
 
@@ -84,11 +100,14 @@ def test_extract_financial_facts_ignores_tdnet_table_scaffolding():
     )
 
     facts = result["facts"]
+    metric_deltas = result["metric_deltas"]
     forecast_rows = [fact for fact in facts if fact["type"] == "forecast_revision_row"]
     metric_rows = {fact["metric"]: fact for fact in facts if fact["type"] == "metric_row"}
+    deltas_by_metric = {delta["metric"]: delta for delta in metric_deltas}
 
     assert forecast_rows == []
     assert result["summary"]["has_forecast_revision"] is False
+    assert result["summary"]["metric_delta_count"] == 5
     assert set(result["summary"]["metric_keys"]) >= {"eps", "net_income", "net_sales"}
     assert metric_rows["net_sales"]["values"] == [
         {"raw": "31,107", "value": 31107, "unit": None},
@@ -101,7 +120,41 @@ def test_extract_financial_facts_ignores_tdnet_table_scaffolding():
         {"raw": "13.26", "value": 13.26, "unit": None},
         {"raw": "11.82", "value": 11.82, "unit": None},
     ]
+    assert deltas_by_metric["net_sales"]["period"] == "2026年7月期第3四半期"
+    assert deltas_by_metric["net_sales"]["comparison_period"] == "2025年7月期第3四半期"
+    assert deltas_by_metric["net_sales"]["comparison_basis"] == "prior_year_same_quarter"
+    assert deltas_by_metric["net_sales"]["current_value"] == 31107
+    assert deltas_by_metric["net_sales"]["comparison_value"] == 28441
+    assert deltas_by_metric["net_sales"]["change_value"] == 2666
+    assert deltas_by_metric["net_sales"]["reported_change_pct"] == 9.4
+    assert deltas_by_metric["net_sales"]["computed_change_pct"] == pytest.approx(9.37)
+    assert deltas_by_metric["net_sales"]["change_pct_source"] == "reported"
+    assert deltas_by_metric["operating_profit"]["change_value"] == 369
+    assert deltas_by_metric["operating_profit"]["reported_change_pct"] == 5.6
+    assert deltas_by_metric["ordinary_profit"]["change_value"] == 557
+    assert deltas_by_metric["ordinary_profit"]["reported_change_pct"] == 8.4
+    assert deltas_by_metric["net_income"]["change_value"] == 438
+    assert deltas_by_metric["net_income"]["reported_change_pct"] == 11.6
+    assert deltas_by_metric["eps"]["change_value"] == pytest.approx(1.44)
+    assert deltas_by_metric["eps"]["reported_change_pct"] is None
+    assert deltas_by_metric["eps"]["computed_change_pct"] == pytest.approx(12.18)
+    assert deltas_by_metric["eps"]["change_pct_source"] == "computed"
     assert all(value["raw"] not in {"1", "3", "5", "7", "9", "(1)"} for fact in facts for value in fact["values"])
+
+
+def test_extract_financial_facts_handles_uneven_table_widths():
+    result = extract_financial_facts(
+        title="2026年７月期第３四半期決算短信〔日本基準〕(連結)",
+        content_text=UNEVEN_TABLE_TEXT,
+    )
+
+    deltas_by_metric = {delta["metric"]: delta for delta in result["metric_deltas"]}
+
+    assert deltas_by_metric["net_sales"]["current_value"] == 31107
+    assert deltas_by_metric["net_sales"]["comparison_value"] == 28441
+    assert deltas_by_metric["net_sales"]["change_value"] == 2666
+    assert deltas_by_metric["net_sales"]["reported_change_pct"] is None
+    assert deltas_by_metric["net_sales"]["change_pct_source"] == "computed"
 
 
 @pytest.mark.asyncio

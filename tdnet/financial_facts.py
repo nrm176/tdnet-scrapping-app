@@ -22,7 +22,7 @@ from .parsers import PARSER_NAME, get_parser_version
 
 FINANCIAL_FACTS_ANALYSIS_TYPE = "financial_facts"
 FINANCIAL_FACTS_ANALYZER_NAME = "tdnet-deterministic-financial-facts"
-FINANCIAL_FACTS_ANALYZER_VERSION = "2"
+FINANCIAL_FACTS_ANALYZER_VERSION = "3"
 
 NUMBER_RE = re.compile(r"[△▲-]?\(?\d[\d,]*(?:\.\d+)?\)?%?")
 TABLE_COLUMN_MARKER_RE = re.compile(r"\bCol\d+\b")
@@ -341,6 +341,181 @@ def _source_line_payload(line: str, line_index: int) -> dict[str, object]:
     }
 
 
+def _numeric_value(value: dict[str, object] | None) -> int | float | None:
+    if not isinstance(value, dict):
+        return None
+    raw_value = value.get("value")
+    return raw_value if isinstance(raw_value, int | float) and not isinstance(raw_value, bool) else None
+
+
+def _computed_change_pct(current_value: int | float | None, comparison_value: int | float | None) -> float | None:
+    if current_value is None or comparison_value in (None, 0):
+        return None
+    return round(((current_value - comparison_value) / abs(comparison_value)) * 100, 2)
+
+
+def _change_value(current_value: int | float | None, comparison_value: int | float | None) -> int | float | None:
+    if current_value is None or comparison_value is None:
+        return None
+    change = current_value - comparison_value
+    if isinstance(change, float):
+        rounded = round(change, 2)
+        return 0 if rounded == 0 else rounded
+    return change
+
+
+def _period_labels(label_cell: str) -> tuple[str | None, str | None]:
+    periods = re.findall(r"\d{4}年\s*\d+月期(?:第\d四半期|中間期|通期)?", label_cell)
+    if len(periods) >= 2:
+        return periods[0], periods[1]
+    parts = [part.strip() for part in re.split(r"\s{2,}|<br\s*/?>", label_cell) if part.strip()]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    return (parts[0], None) if parts else (None, None)
+
+
+def _comparison_basis(period: str | None, comparison_period: str | None) -> str:
+    if period and comparison_period:
+        if "第" in period and "四半期" in period and "第" in comparison_period and "四半期" in comparison_period:
+            return "prior_year_same_quarter"
+        return "prior_year_comparable_period"
+    return "unknown_comparison"
+
+
+def _percent_value(values: list[dict[str, object]]) -> dict[str, object] | None:
+    for value in values:
+        if value.get("unit") == "percent":
+            return value
+    return values[0] if values else None
+
+
+def _table_metric_deltas(
+    *,
+    line: str,
+    line_index: int,
+    metrics_by_column: list[MetricDefinition | None],
+) -> list[dict[str, object]]:
+    cells = _split_markdown_cells(line)
+    if len(cells) < 2 or _is_table_separator(line):
+        return []
+
+    period, comparison_period = _period_labels(cells[0])
+    deltas: list[dict[str, object]] = []
+    for index, cell in enumerate(cells[1:], 1):
+        metric = metrics_by_column[index] if index < len(metrics_by_column) else None
+        if metric is None or cell.startswith(("%", "％")):
+            continue
+
+        values = _drop_label_numbers(cell, _extract_numeric_values(cell))
+        if len(values) < 2:
+            continue
+
+        current_value = _numeric_value(values[0])
+        comparison_value = _numeric_value(values[1])
+        if current_value is None or comparison_value is None:
+            continue
+
+        reported_change_pct = None
+        reported_change_pct_raw = None
+        if (
+            index + 1 < len(cells)
+            and index + 1 < len(metrics_by_column)
+            and metrics_by_column[index + 1] is None
+            and cells[index + 1].startswith(("%", "％"))
+        ):
+            percent_source = _percent_value(_extract_numeric_values(cells[index + 1]))
+            reported_change_pct = _numeric_value(percent_source)
+            reported_change_pct_raw = percent_source.get("raw") if percent_source is not None else None
+
+        computed_change_pct = _computed_change_pct(current_value, comparison_value)
+        deltas.append(
+            {
+                "type": "metric_delta",
+                "metric": metric.key,
+                "metric_label_ja": metric.label_ja,
+                "unit": metric.unit,
+                "period": period,
+                "comparison_period": comparison_period,
+                "comparison_basis": _comparison_basis(period, comparison_period),
+                "current_value": current_value,
+                "current_raw": values[0].get("raw"),
+                "comparison_value": comparison_value,
+                "comparison_raw": values[1].get("raw"),
+                "change_value": _change_value(current_value, comparison_value),
+                "reported_change_pct": reported_change_pct,
+                "reported_change_pct_raw": reported_change_pct_raw,
+                "computed_change_pct": computed_change_pct,
+                "change_pct_source": "reported" if reported_change_pct is not None else "computed",
+                "source": _source_line_payload(line, line_index),
+                "confidence": 0.82 if reported_change_pct is not None else 0.76,
+            }
+        )
+    return deltas
+
+
+def _forecast_metric_deltas(facts: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows_by_metric: dict[str, dict[str, dict[str, object]]] = {}
+    source_by_metric: dict[str, dict[str, object]] = {}
+    metric_labels: dict[str, str] = {}
+    metric_units: dict[str, str] = {}
+
+    for fact in facts:
+        if fact.get("type") != "forecast_revision_row":
+            continue
+        row_kind = fact.get("row_kind")
+        values = fact.get("values")
+        if not isinstance(row_kind, str) or not isinstance(values, list):
+            continue
+        for value in values:
+            if not isinstance(value, dict) or not isinstance(value.get("metric"), str):
+                continue
+            metric = str(value["metric"])
+            rows_by_metric.setdefault(metric, {})[row_kind] = value
+            metric_labels[metric] = str(value.get("metric_label_ja") or metric)
+            metric_units[metric] = str(value.get("metric_unit") or "")
+            if isinstance(fact.get("source"), dict):
+                source_by_metric.setdefault(metric, fact["source"])
+
+    deltas: list[dict[str, object]] = []
+    for metric, rows in rows_by_metric.items():
+        current = rows.get("current_forecast")
+        previous = rows.get("previous_forecast")
+        if current is None or previous is None:
+            continue
+        current_value = _numeric_value(current)
+        comparison_value = _numeric_value(previous)
+        if current_value is None or comparison_value is None:
+            continue
+        change_amount = _numeric_value(rows.get("change_amount"))
+        change_percent = _numeric_value(rows.get("change_percent"))
+        computed_change = _change_value(current_value, comparison_value)
+        deltas.append(
+            {
+                "type": "metric_delta",
+                "metric": metric,
+                "metric_label_ja": metric_labels.get(metric, metric),
+                "unit": metric_units.get(metric) or None,
+                "period": "current_forecast",
+                "comparison_period": "previous_forecast",
+                "comparison_basis": "previous_forecast",
+                "current_value": current_value,
+                "current_raw": current.get("raw"),
+                "comparison_value": comparison_value,
+                "comparison_raw": previous.get("raw"),
+                "change_value": change_amount if change_amount is not None else computed_change,
+                "reported_change_pct": change_percent,
+                "reported_change_pct_raw": rows.get("change_percent", {}).get("raw")
+                if isinstance(rows.get("change_percent"), dict)
+                else None,
+                "computed_change_pct": _computed_change_pct(current_value, comparison_value),
+                "change_pct_source": "reported" if change_percent is not None else "computed",
+                "source": source_by_metric.get(metric),
+                "confidence": 0.84 if change_amount is not None or change_percent is not None else 0.74,
+            }
+        )
+    return deltas
+
+
 def extract_financial_facts(
     *,
     title: str,
@@ -353,6 +528,7 @@ def extract_financial_facts(
     """Extract a conservative set of structured financial facts from parsed text."""
     lines = _line_iter(content_text)
     facts: list[dict[str, object]] = []
+    metric_deltas: list[dict[str, object]] = []
     current_header_metrics: list[MetricDefinition] = []
     current_table_metrics: list[MetricDefinition | None] = []
 
@@ -370,6 +546,13 @@ def extract_financial_facts(
             )
             if table_facts:
                 facts.extend(table_facts)
+                metric_deltas.extend(
+                    _table_metric_deltas(
+                        line=line,
+                        line_index=line_index,
+                        metrics_by_column=current_table_metrics,
+                    )
+                )
                 continue
             if not _is_table_separator(line):
                 current_table_metrics = []
@@ -428,6 +611,7 @@ def extract_financial_facts(
             if isinstance(value, dict) and value.get("metric"):
                 metric_keys.add(str(value["metric"]))
     forecast_row_count = sum(1 for fact in facts if fact.get("type") == "forecast_revision_row")
+    metric_deltas.extend(_forecast_metric_deltas(facts))
     return {
         "schema_version": 1,
         "analysis_type": FINANCIAL_FACTS_ANALYSIS_TYPE,
@@ -440,8 +624,10 @@ def extract_financial_facts(
             "title": title,
         },
         "facts": facts,
+        "metric_deltas": metric_deltas,
         "summary": {
             "fact_count": len(facts),
+            "metric_delta_count": len(metric_deltas),
             "metric_keys": sorted(metric_keys),
             "forecast_revision_rows": forecast_row_count,
             "has_forecast_revision": forecast_row_count > 0,
@@ -457,6 +643,7 @@ def summarize_financial_facts(result_json: dict[str, object]) -> str:
     metrics = ",".join(str(metric) for metric in metric_keys) if isinstance(metric_keys, list) else ""
     return (
         f"financial_facts fact_count={summary.get('fact_count', 0)} "
+        f"metric_delta_count={summary.get('metric_delta_count', 0)} "
         f"metrics={metrics or '-'} forecast_revision_rows={summary.get('forecast_revision_rows', 0)}"
     )
 

@@ -78,6 +78,7 @@ export type ReportTagAssignment = {
 
 export type FinancialFactSummary = {
   fact_count: number;
+  metric_delta_count: number;
   metric_keys: string[];
   forecast_revision_rows: number;
   has_forecast_revision: boolean;
@@ -109,6 +110,27 @@ export type FinancialFact = {
   confidence: number | null;
 };
 
+export type FinancialMetricDelta = {
+  type: string;
+  metric: string | null;
+  metric_label_ja: string | null;
+  unit: string | null;
+  period: string | null;
+  comparison_period: string | null;
+  comparison_basis: string | null;
+  current_value: number | null;
+  current_raw: string | null;
+  comparison_value: number | null;
+  comparison_raw: string | null;
+  change_value: number | null;
+  reported_change_pct: number | null;
+  reported_change_pct_raw: string | null;
+  computed_change_pct: number | null;
+  change_pct_source: string | null;
+  source: FinancialFactSource | null;
+  confidence: number | null;
+};
+
 export type FinancialFactsAnalysis = {
   analysis_id: number;
   file_id: number;
@@ -121,6 +143,7 @@ export type FinancialFactsAnalysis = {
   result_text: string | null;
   summary: FinancialFactSummary;
   facts: FinancialFact[];
+  metric_deltas: FinancialMetricDelta[];
 };
 
 export type CompanyTimelineFile = {
