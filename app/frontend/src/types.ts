@@ -76,6 +76,53 @@ export type ReportTagAssignment = {
   source: string;
 };
 
+export type FinancialFactSummary = {
+  fact_count: number;
+  metric_keys: string[];
+  forecast_revision_rows: number;
+  has_forecast_revision: boolean;
+};
+
+export type FinancialFactSource = {
+  line_index: number | null;
+  text: string;
+};
+
+export type FinancialFactValue = {
+  raw?: string;
+  value?: number | string | null;
+  unit?: string | null;
+  metric?: string | null;
+  metric_label_ja?: string | null;
+  metric_unit?: string | null;
+  [key: string]: unknown;
+};
+
+export type FinancialFact = {
+  type: string;
+  row_kind: string | null;
+  metric: string | null;
+  metric_label_ja: string | null;
+  unit: string | null;
+  values: FinancialFactValue[];
+  source: FinancialFactSource | null;
+  confidence: number | null;
+};
+
+export type FinancialFactsAnalysis = {
+  analysis_id: number;
+  file_id: number;
+  parse_job_id: number | null;
+  status: string;
+  analyzer_name: string;
+  analyzer_version: string;
+  analyzed_at: string | null;
+  last_analysis_error: string | null;
+  result_text: string | null;
+  summary: FinancialFactSummary;
+  facts: FinancialFact[];
+};
+
 export type CompanyTimelineFile = {
   file_id: number;
   file_type: string;
@@ -98,6 +145,7 @@ export type CompanyTimelineParser = {
   char_count: number | null;
   has_text: boolean;
   last_parse_error: string | null;
+  financial_facts: FinancialFactsAnalysis | null;
 };
 
 export type CompanyTimelineDisclosure = {
@@ -112,6 +160,7 @@ export type CompanyTimelineDisclosure = {
   files: CompanyTimelineFile[];
   parsers: CompanyTimelineParser[];
   best_parse_job_id: number | null;
+  financial_facts: FinancialFactsAnalysis | null;
   snippet: string;
 };
 
@@ -141,6 +190,7 @@ export type ParseSearchResult = {
   snippet: string;
   tags: ReportTagAssignment[];
   matched_pages: ParsedPageMatch[];
+  financial_facts: FinancialFactsAnalysis | null;
 };
 
 export type ParseSearchResponse = {

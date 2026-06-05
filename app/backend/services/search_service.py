@@ -14,6 +14,10 @@ from app.backend.schemas import (
     CompanyTimelineFileResponse,
     CompanyTimelineParserResponse,
     CompanyTimelineResponse,
+    FinancialFactsAnalysisResponse,
+    FinancialFactResponse,
+    FinancialFactSourceResponse,
+    FinancialFactSummaryResponse,
     ParsedPageMatchResponse,
     ParsedPageResponse,
     ParserFallbackCandidate,
@@ -28,6 +32,7 @@ from app.backend.schemas import (
     ReportCalendarDay,
     ReportTagResponse,
 )
+from tdnet.financial_facts import FINANCIAL_FACTS_ANALYSIS_TYPE
 from tdnet.tagging import (
     list_report_tag_summaries,
     list_tag_assignments_for_disclosures,
@@ -37,6 +42,7 @@ from tdnet.tagging import (
 from tdnet.orm import (
     DisclosureFileRecord,
     DisclosureRecord,
+    DocumentAnalysisResultRecord,
     DocumentParseJobRecord,
     DocumentParseTextRecord,
 )
@@ -240,6 +246,130 @@ def _tag_views_to_response(tags: list) -> list[ReportTagAssignmentResponse]:
     ]
 
 
+def _safe_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _financial_fact_summary(result_json: dict | None) -> FinancialFactSummaryResponse:
+    summary = result_json.get("summary") if isinstance(result_json, dict) else None
+    if not isinstance(summary, dict):
+        return FinancialFactSummaryResponse(
+            fact_count=0,
+            metric_keys=[],
+            forecast_revision_rows=0,
+            has_forecast_revision=False,
+        )
+    metric_keys = summary.get("metric_keys")
+    return FinancialFactSummaryResponse(
+        fact_count=max(0, _safe_int(summary.get("fact_count"))),
+        metric_keys=sorted(str(metric) for metric in metric_keys) if isinstance(metric_keys, list) else [],
+        forecast_revision_rows=max(0, _safe_int(summary.get("forecast_revision_rows"))),
+        has_forecast_revision=bool(summary.get("has_forecast_revision")),
+    )
+
+
+def _financial_fact_source(raw_source: object) -> FinancialFactSourceResponse | None:
+    if not isinstance(raw_source, dict):
+        return None
+    text = raw_source.get("text")
+    return FinancialFactSourceResponse(
+        line_index=_safe_int(raw_source.get("line_index")) if raw_source.get("line_index") is not None else None,
+        text=str(text or ""),
+    )
+
+
+def _financial_fact_rows(result_json: dict | None) -> list[FinancialFactResponse]:
+    raw_facts = result_json.get("facts") if isinstance(result_json, dict) else None
+    if not isinstance(raw_facts, list):
+        return []
+
+    facts: list[FinancialFactResponse] = []
+    for raw_fact in raw_facts:
+        if not isinstance(raw_fact, dict):
+            continue
+        raw_values = raw_fact.get("values")
+        values = [dict(value) for value in raw_values if isinstance(value, dict)] if isinstance(raw_values, list) else []
+        confidence = raw_fact.get("confidence")
+        facts.append(
+            FinancialFactResponse(
+                type=str(raw_fact.get("type") or "unknown"),
+                row_kind=str(raw_fact["row_kind"]) if raw_fact.get("row_kind") is not None else None,
+                metric=str(raw_fact["metric"]) if raw_fact.get("metric") is not None else None,
+                metric_label_ja=str(raw_fact["metric_label_ja"]) if raw_fact.get("metric_label_ja") is not None else None,
+                unit=str(raw_fact["unit"]) if raw_fact.get("unit") is not None else None,
+                values=values,
+                source=_financial_fact_source(raw_fact.get("source")),
+                confidence=float(confidence) if isinstance(confidence, int | float) else None,
+            )
+        )
+    return facts
+
+
+def _financial_facts_response(
+    record: DocumentAnalysisResultRecord,
+    *,
+    include_facts: bool = False,
+) -> FinancialFactsAnalysisResponse:
+    result_json = record.result_json if isinstance(record.result_json, dict) else None
+    return FinancialFactsAnalysisResponse(
+        analysis_id=record.id,
+        file_id=record.file_id,
+        parse_job_id=record.parse_job_id,
+        status=record.status,
+        analyzer_name=record.analyzer_name,
+        analyzer_version=record.analyzer_version,
+        analyzed_at=record.analyzed_at,
+        last_analysis_error=record.last_analysis_error,
+        result_text=record.result_text,
+        summary=_financial_fact_summary(result_json),
+        facts=_financial_fact_rows(result_json) if include_facts else [],
+    )
+
+
+async def _load_financial_facts(
+    session: AsyncSession,
+    parse_job_ids: Sequence[int],
+    *,
+    include_facts: bool = False,
+) -> dict[int, FinancialFactsAnalysisResponse]:
+    unique_ids = list(dict.fromkeys(parse_job_ids))
+    if not unique_ids:
+        return {}
+    records = (
+        await session.scalars(
+            select(DocumentAnalysisResultRecord)
+            .where(DocumentAnalysisResultRecord.parse_job_id.in_(unique_ids))
+            .where(DocumentAnalysisResultRecord.analysis_type == FINANCIAL_FACTS_ANALYSIS_TYPE)
+            .order_by(
+                DocumentAnalysisResultRecord.parse_job_id.asc(),
+                DocumentAnalysisResultRecord.id.desc(),
+            )
+        )
+    ).all()
+    selected_records: dict[int, DocumentAnalysisResultRecord] = {}
+    for record in records:
+        if record.parse_job_id is None:
+            continue
+        existing = selected_records.get(record.parse_job_id)
+        if existing is None or (existing.status != "completed" and record.status == "completed"):
+            selected_records[record.parse_job_id] = record
+    return {
+        parse_job_id: _financial_facts_response(record, include_facts=include_facts)
+        for parse_job_id, record in selected_records.items()
+    }
+
+
 def _row_to_result(
     parse_job: DocumentParseJobRecord,
     parse_text: DocumentParseTextRecord,
@@ -249,6 +379,7 @@ def _row_to_result(
     query: str | None,
     snippet_query: str | None = None,
     tags: list[ReportTagAssignmentResponse] | None = None,
+    financial_facts: FinancialFactsAnalysisResponse | None = None,
 ) -> ParseSearchResult:
     return ParseSearchResult(
         parse_job_id=parse_job.id,
@@ -267,6 +398,7 @@ def _row_to_result(
         snippet=_make_snippet(parse_text.content_text, snippet_query or query),
         tags=tags or [],
         matched_pages=_find_page_matches(parse_text.pages_json, snippet_query or query),
+        financial_facts=financial_facts,
     )
 
 
@@ -579,7 +711,9 @@ async def search_parse_texts(
         )
     ).all()
     disclosure_ids = [disclosure.id for _, _, _, disclosure in rows]
+    parse_job_ids = [parse_job.id for parse_job, _, _, _ in rows]
     tag_map = await list_tag_assignments_for_disclosures(session, disclosure_ids)
+    financial_fact_map = await _load_financial_facts(session, parse_job_ids)
     return ParseSearchResponse(
         query=normalized_query,
         total=total,
@@ -594,6 +728,7 @@ async def search_parse_texts(
                 query=normalized_query,
                 snippet_query=normalized_text_query,
                 tags=_tag_views_to_response(tag_map.get(disclosure.id, [])),
+                financial_facts=financial_fact_map.get(parse_job.id),
             )
             for parse_job, parse_text, file_record, disclosure in rows
         ],
@@ -713,6 +848,7 @@ async def get_company_timeline(
     parse_rows_by_disclosure: defaultdict[str, list[tuple[DocumentParseJobRecord, DocumentParseTextRecord | None]]] = (
         defaultdict(list)
     )
+    financial_fact_map: dict[int, FinancialFactsAnalysisResponse] = {}
     if file_disclosure_ids:
         parse_rows = (
             await session.execute(
@@ -730,6 +866,7 @@ async def get_company_timeline(
             disclosure_id = file_disclosure_ids.get(parse_job.file_id)
             if disclosure_id is not None:
                 parse_rows_by_disclosure[disclosure_id].append((parse_job, parse_text))
+        financial_fact_map = await _load_financial_facts(session, [parse_job.id for parse_job, _ in parse_rows])
 
     results: list[CompanyTimelineDisclosureResponse] = []
     for disclosure in disclosures:
@@ -775,10 +912,12 @@ async def get_company_timeline(
                         char_count=parse_text.char_count if parse_text is not None else None,
                         has_text=parse_text is not None,
                         last_parse_error=parse_job.last_parse_error,
+                        financial_facts=financial_fact_map.get(parse_job.id),
                     )
                     for parse_job, parse_text in parse_rows
                 ],
                 best_parse_job_id=best_parse_job_id,
+                financial_facts=financial_fact_map.get(best_parse_job_id) if best_parse_job_id is not None else None,
                 snippet=snippet,
             )
         )
@@ -877,6 +1016,7 @@ async def get_parse_job_detail(
         return None
     parse_job, parse_text, file_record, disclosure = row
     tag_map = await list_tag_assignments_for_disclosures(session, [disclosure.id])
+    financial_fact_map = await _load_financial_facts(session, [parse_job.id], include_facts=True)
     base = _row_to_result(
         parse_job,
         parse_text,
@@ -884,6 +1024,7 @@ async def get_parse_job_detail(
         disclosure,
         query=None,
         tags=_tag_views_to_response(tag_map.get(disclosure.id, [])),
+        financial_facts=financial_fact_map.get(parse_job.id),
     )
     return ParseJobDetailResponse(
         **base.model_dump(),
