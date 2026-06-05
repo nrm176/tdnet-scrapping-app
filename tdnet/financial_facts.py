@@ -22,9 +22,10 @@ from .parsers import PARSER_NAME, get_parser_version
 
 FINANCIAL_FACTS_ANALYSIS_TYPE = "financial_facts"
 FINANCIAL_FACTS_ANALYZER_NAME = "tdnet-deterministic-financial-facts"
-FINANCIAL_FACTS_ANALYZER_VERSION = "1"
+FINANCIAL_FACTS_ANALYZER_VERSION = "2"
 
 NUMBER_RE = re.compile(r"[△▲-]?\(?\d[\d,]*(?:\.\d+)?\)?%?")
+TABLE_COLUMN_MARKER_RE = re.compile(r"\bCol\d+\b")
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,15 @@ def _first_match_position(patterns: Sequence[str], text: str) -> int | None:
 
 
 def _metrics_in_line(line: str) -> list[MetricDefinition]:
+    if re.search(r"1\s*株", line):
+        per_share_metrics = [
+            metric
+            for metric in METRIC_DEFINITIONS
+            if metric.key in {"eps", "dividend_per_share"} and _matches_any(metric.patterns, line)
+        ]
+        if per_share_metrics:
+            return per_share_metrics
+
     matched = [
         (position, metric)
         for metric in METRIC_DEFINITIONS
@@ -153,9 +163,125 @@ def _metrics_in_line(line: str) -> list[MetricDefinition]:
     return [metric for _, metric in sorted(matched, key=lambda item: item[0])]
 
 
+def _split_markdown_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if "|" not in stripped:
+        return []
+    return [_clean_cell(cell) for cell in stripped.strip("|").split("|")]
+
+
+def _clean_cell(value: str) -> str:
+    cell = normalize_financial_text(value)
+    cell = re.sub(r"<br\s*/?>", " ", cell, flags=re.IGNORECASE)
+    cell = TABLE_COLUMN_MARKER_RE.sub(" ", cell)
+    cell = re.sub(r"\s+", " ", cell)
+    return cell.strip()
+
+
+def _is_table_separator(line: str) -> bool:
+    return bool(re.fullmatch(r"[\s|:-]+", line))
+
+
+def _metric_for_table_cell(cell: str) -> MetricDefinition | None:
+    if not cell or re.fullmatch(r"Col\d+", cell):
+        return None
+    if "潜在株式調整後" in cell:
+        return None
+    metrics = _metrics_in_line(cell)
+    return metrics[0] if metrics else None
+
+
+def _table_header_metrics(line: str) -> list[MetricDefinition | None]:
+    cells = _split_markdown_cells(line)
+    if len(cells) < 2:
+        return []
+    first_metric = _metric_for_table_cell(cells[0])
+    if first_metric is not None:
+        metrics_by_column = [None, first_metric]
+        metrics_by_column.extend(_metric_for_table_cell(cell) for cell in cells[1:])
+    else:
+        metrics_by_column = [None] * len(cells)
+        for index, cell in enumerate(cells[1:], 1):
+            metrics_by_column[index] = _metric_for_table_cell(cell)
+    if sum(1 for metric in metrics_by_column if metric is not None) < 1:
+        return []
+    return metrics_by_column
+
+
+def _table_metric_facts(
+    *,
+    line: str,
+    line_index: int,
+    metrics_by_column: list[MetricDefinition | None],
+) -> list[dict[str, object]]:
+    cells = _split_markdown_cells(line)
+    if len(cells) < 2 or _is_table_separator(line):
+        return []
+
+    row_kind = _forecast_row_kind(line)
+    has_financial_unit = any(re.search(r"百万円|千円|億円|円|銭|%|％", cell) for cell in cells[1:])
+    has_data_label = bool(re.search(r"年|期|予想|実績|今回|前回|増減", cells[0]))
+    if row_kind is None and not has_financial_unit and re.search(r"第\d四半期末|期末|合計", line):
+        return []
+    if row_kind is None and not has_financial_unit and not has_data_label:
+        return []
+
+    if row_kind:
+        mapped_values = []
+        for index, cell in enumerate(cells[1:], 1):
+            metric = metrics_by_column[index] if index < len(metrics_by_column) else None
+            for value in _extract_numeric_values(cell):
+                payload = dict(value)
+                if metric is not None:
+                    payload["metric"] = metric.key
+                    payload["metric_label_ja"] = metric.label_ja
+                    payload["metric_unit"] = metric.unit
+                mapped_values.append(payload)
+        if mapped_values:
+            return [
+                {
+                    "type": "forecast_revision_row",
+                    "row_kind": row_kind,
+                    "values": mapped_values,
+                    "source": _source_line_payload(line, line_index),
+                    "confidence": 0.72,
+                }
+            ]
+
+    facts: list[dict[str, object]] = []
+    for index, cell in enumerate(cells[1:], 1):
+        metric = metrics_by_column[index] if index < len(metrics_by_column) else None
+        if metric is None or cell.startswith(("%", "％")):
+            continue
+        values = _extract_numeric_values(cell)
+        values = _drop_label_numbers(cell, values)
+        if not values:
+            continue
+        facts.append(
+            {
+                "type": "metric_row",
+                "metric": metric.key,
+                "metric_label_ja": metric.label_ja,
+                "unit": metric.unit,
+                "values": values,
+                "source": _source_line_payload(line, line_index),
+                "confidence": 0.72,
+            }
+        )
+    return facts
+
+
 def _forecast_row_kind(line: str) -> str | None:
+    cells = _split_markdown_cells(line)
+    label = cells[0] if cells else line
+    label = label.strip()
+    if re.match(r"^[\(（]\d+[\)）]", label):
+        return None
+    if "表示は" in line and "予想" not in label:
+        return None
+
     for row_kind, pattern in FORECAST_ROW_PATTERNS:
-        if re.search(pattern, line, flags=re.IGNORECASE):
+        if re.search(pattern, label[:80], flags=re.IGNORECASE):
             return row_kind
     return None
 
@@ -163,6 +289,8 @@ def _forecast_row_kind(line: str) -> str | None:
 def _parse_numeric_value(raw_value: str) -> dict[str, object] | None:
     raw = normalize_financial_text(raw_value).strip()
     if not raw or raw in {"-", "△"}:
+        return None
+    if re.fullmatch(r"\(\d\)", raw):
         return None
 
     is_percent = raw.endswith("%")
@@ -187,8 +315,13 @@ def _parse_numeric_value(raw_value: str) -> dict[str, object] | None:
 
 
 def _extract_numeric_values(line: str) -> list[dict[str, object]]:
+    numeric_source = TABLE_COLUMN_MARKER_RE.sub(" ", line)
+    numeric_source = re.sub(r"第\s*\d+\s*四半期", " ", numeric_source)
+    numeric_source = re.sub(r"\d{4}\s*年\s*\d+\s*月期?", " ", numeric_source)
+    numeric_source = re.sub(r"\d+\s*月\s*\d+\s*日", " ", numeric_source)
+    numeric_source = re.sub(r"^\d+\.\s*(?=[^\d\s])", " ", numeric_source)
     values: list[dict[str, object]] = []
-    for match in NUMBER_RE.finditer(line):
+    for match in NUMBER_RE.finditer(numeric_source):
         parsed = _parse_numeric_value(match.group(0))
         if parsed is not None:
             values.append(parsed)
@@ -221,8 +354,26 @@ def extract_financial_facts(
     lines = _line_iter(content_text)
     facts: list[dict[str, object]] = []
     current_header_metrics: list[MetricDefinition] = []
+    current_table_metrics: list[MetricDefinition | None] = []
 
     for line_index, line in enumerate(lines, 1):
+        table_metrics = _table_header_metrics(line)
+        if table_metrics:
+            current_table_metrics = table_metrics
+            current_header_metrics = [metric for metric in table_metrics if metric is not None]
+            continue
+        if current_table_metrics:
+            table_facts = _table_metric_facts(
+                line=line,
+                line_index=line_index,
+                metrics_by_column=current_table_metrics,
+            )
+            if table_facts:
+                facts.extend(table_facts)
+                continue
+            if not _is_table_separator(line):
+                current_table_metrics = []
+
         values = _extract_numeric_values(line)
         metrics = _metrics_in_line(line)
         row_kind = _forecast_row_kind(line)
@@ -254,7 +405,7 @@ def extract_financial_facts(
                 }
             )
 
-        if values and metrics:
+        if values and metrics and len(metrics) == 1:
             for metric in metrics:
                 facts.append(
                     {

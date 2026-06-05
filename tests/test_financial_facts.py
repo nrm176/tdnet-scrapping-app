@@ -28,6 +28,27 @@ FINANCIAL_TEXT = """
 1株当たり配当金 40.00 45.00
 """
 
+TDNET_RESULT_TABLE_TEXT = """
+（１）連結経営成績(累計) (％表示は、対前年同四半期増減率)
+
+|Col1|売上高|Col3|営業利益|Col5|経常利益|Col7|親会社株主に帰属<br>する四半期純利益|Col9|
+|---|---|---|---|---|---|---|---|---|
+|2026年７月期第３四半期<br>2025年７月期第３四半期|百万円<br>31,107<br>28,441|％<br>9.4<br>13.3|百万円<br>7,016<br>6,647|％<br>5.6<br>23.6|百万円<br>7,178<br>6,621|％<br>8.4<br>21.7|百万円<br>4,208<br>3,770|％<br>11.6<br>7.9|
+
+|Col1|１株当たり<br>四半期純利益|潜在株式調整後<br>１株当たり<br>四半期純利益|
+|---|---|---|
+|2026年７月期第３四半期<br>2025年７月期第３四半期|円<br>銭<br>13.26<br>11.82|円<br>銭<br>13.17<br>11.76|
+
+|２．配当の状況|Col2|Col3|Col4|Col5|Col6|
+|---|---|---|---|---|---|
+||年間配当金|年間配当金|年間配当金|年間配当金|年間配当金|
+||第１四半期末|第２四半期末|第３四半期末|期末|合計|
+|2025年７月期<br>2026年７月期|円<br>銭<br>-<br>-|円<br>銭<br>0.00<br>0.00|円<br>銭<br>-<br>-|円<br>銭<br>8.00|円<br>銭<br>8.00|
+
+以上の結果、当第3四半期連結累計期間における売上高は14,221百万円(前年同期比7.4%増)、営業利益は3,613百万円となりました。
+3.セグメント利益は、四半期連結損益計算書の営業利益と調整を行っております。
+"""
+
 
 def test_extract_financial_facts_finds_metrics_and_forecast_rows():
     result = extract_financial_facts(
@@ -51,6 +72,36 @@ def test_extract_financial_facts_finds_metrics_and_forecast_rows():
     assert forecast_rows[-1]["values"][0]["unit"] == "percent"
     assert any(fact["metric"] == "dividend_per_share" and fact["values"][0]["value"] == 40.0 for fact in metric_rows)
     assert result["document"]["code"] == "12345"
+
+
+def test_extract_financial_facts_ignores_tdnet_table_scaffolding():
+    result = extract_financial_facts(
+        title="2026年７月期第３四半期決算短信〔日本基準〕(連結)",
+        content_text=TDNET_RESULT_TABLE_TEXT,
+        disclosure_id="abc",
+        code="23530",
+        disclosure_date=date(2026, 6, 5),
+    )
+
+    facts = result["facts"]
+    forecast_rows = [fact for fact in facts if fact["type"] == "forecast_revision_row"]
+    metric_rows = {fact["metric"]: fact for fact in facts if fact["type"] == "metric_row"}
+
+    assert forecast_rows == []
+    assert result["summary"]["has_forecast_revision"] is False
+    assert set(result["summary"]["metric_keys"]) >= {"eps", "net_income", "net_sales"}
+    assert metric_rows["net_sales"]["values"] == [
+        {"raw": "31,107", "value": 31107, "unit": None},
+        {"raw": "28,441", "value": 28441, "unit": None},
+    ]
+    assert metric_rows["operating_profit"]["values"][0]["value"] == 7016
+    assert metric_rows["ordinary_profit"]["values"][0]["value"] == 7178
+    assert metric_rows["net_income"]["values"][0]["value"] == 4208
+    assert metric_rows["eps"]["values"] == [
+        {"raw": "13.26", "value": 13.26, "unit": None},
+        {"raw": "11.82", "value": 11.82, "unit": None},
+    ]
+    assert all(value["raw"] not in {"1", "3", "5", "7", "9", "(1)"} for fact in facts for value in fact["values"])
 
 
 @pytest.mark.asyncio
