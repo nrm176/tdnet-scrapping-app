@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileText,
   RefreshCw,
+  Save,
   Search,
   X,
 } from "lucide-react";
@@ -23,6 +24,7 @@ import {
   fetchTags,
   pageImageUrl,
   searchParseTexts,
+  updateParseJobReview,
 } from "./api";
 import type {
   CompanyTimelineDisclosure,
@@ -31,11 +33,14 @@ import type {
   FinancialFactsAnalysis,
   FinancialFactValue,
   ParseJobDetail,
+  ParseReviewDecision,
   ParseSearchResult,
   ParserOption,
   ParserQuality,
   ReportCalendarDay,
   ReportTag,
+  ReviewState,
+  ReviewStateFilter,
 } from "./types";
 
 type ParserSelection = {
@@ -58,6 +63,7 @@ type SearchCriteria = {
   dateTo: string;
   tags: string[];
   tagMode: "any" | "all";
+  reviewState: ReviewStateFilterValue;
   parserValue: string;
   bestOnly: boolean;
 };
@@ -65,6 +71,8 @@ type SearchCriteria = {
 type SearchCriteriaOverrides = Partial<Omit<SearchCriteria, "tags">> & {
   tags?: string[];
 };
+
+type ReviewStateFilterValue = "" | ReviewStateFilter;
 
 const EMPTY_CRITERIA: SearchCriteria = {
   titleQuery: "",
@@ -74,9 +82,24 @@ const EMPTY_CRITERIA: SearchCriteria = {
   dateTo: "",
   tags: [],
   tagMode: "any",
+  reviewState: "",
   parserValue: "",
   bestOnly: true,
 };
+
+const REVIEW_STATE_OPTIONS: { value: ReviewState; label: string }[] = [
+  { value: "needs_review", label: "Needs review" },
+  { value: "accepted", label: "Accepted" },
+  { value: "bad_parse", label: "Bad parse" },
+  { value: "prefer_ocr", label: "Prefer OCR" },
+  { value: "prefer_ixbrl", label: "Prefer iXBRL" },
+];
+
+const REVIEW_FILTER_OPTIONS: { value: ReviewStateFilterValue; label: string }[] = [
+  { value: "", label: "All" },
+  { value: "unreviewed", label: "Unreviewed" },
+  ...REVIEW_STATE_OPTIONS,
+];
 
 function parserKey(option: ParserOption): string {
   return `${option.parser_name}::${option.parser_version}`;
@@ -100,6 +123,26 @@ function compactVersion(value: string): string {
 
 function describeParserOption(option: ParserOption): string {
   return `${option.parser_name} · ${compactVersion(option.parser_version)}`;
+}
+
+function reviewStateLabel(value: ReviewStateFilterValue | ReviewState): string {
+  return REVIEW_FILTER_OPTIONS.find((option) => option.value === value)?.label ?? value.replaceAll("_", " ");
+}
+
+function reviewStateClass(value: ReviewStateFilter | ReviewState): string {
+  return value.replaceAll("_", "-");
+}
+
+function renderReviewDecisionBadge(decision: ParseReviewDecision | null): ReactNode {
+  const state: ReviewStateFilter = decision?.review_state ?? "unreviewed";
+  const title = decision
+    ? `${reviewStateLabel(decision.review_state)}${decision.reviewer ? ` · ${decision.reviewer}` : ""}`
+    : "Unreviewed";
+  return (
+    <span className={`review-state-chip ${reviewStateClass(state)}`} title={title}>
+      {reviewStateLabel(state)}
+    </span>
+  );
 }
 
 function renderHighlightedText(text: string, query: string): ReactNode {
@@ -392,6 +435,7 @@ function App() {
   const [dateTo, setDateTo] = useState("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagMode, setTagMode] = useState<"any" | "all">("any");
+  const [reviewStateFilter, setReviewStateFilter] = useState<ReviewStateFilterValue>("");
   const [calendarMonth, setCalendarMonth] = useState(currentMonthKey());
   const [calendarDays, setCalendarDays] = useState<ReportCalendarDay[]>([]);
   const [timelineCode, setTimelineCode] = useState("");
@@ -403,12 +447,16 @@ function App() {
   const [detail, setDetail] = useState<ParseJobDetail | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [targetPage, setTargetPage] = useState<number | null>(null);
+  const [reviewFormState, setReviewFormState] = useState<ReviewState>("needs_review");
+  const [reviewNotes, setReviewNotes] = useState("");
+  const [reviewer, setReviewer] = useState(() => window.localStorage.getItem("tdnet-reviewer") ?? "");
   const [loading, setLoading] = useState(false);
   const [initialResultsLoaded, setInitialResultsLoaded] = useState(false);
   const [qualityLoading, setQualityLoading] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [reviewSaving, setReviewSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selectedPage = detail?.pages[pageIndex] ?? detail?.pages[0] ?? null;
@@ -469,6 +517,9 @@ function App() {
       const value = appliedCriteria.tags.map((slug) => tagLabelBySlug.get(slug) ?? slug).join(", ");
       items.push({ label: `Tags ${appliedCriteria.tagMode}`, value });
     }
+    if (appliedCriteria.reviewState) {
+      items.push({ label: "Review", value: reviewStateLabel(appliedCriteria.reviewState) });
+    }
     return items;
   }, [appliedCriteria, appliedParserLabel, tagLabelBySlug]);
   const selectedDate = dateFrom && dateFrom === dateTo ? dateFrom : "";
@@ -495,6 +546,7 @@ function App() {
       dateTo: overrides.dateTo ?? dateTo,
       tags: overrides.tags ?? selectedTags,
       tagMode: overrides.tagMode ?? tagMode,
+      reviewState: overrides.reviewState ?? reviewStateFilter,
       parserValue: overrides.parserValue ?? parserValue,
       bestOnly: overrides.bestOnly ?? bestOnly,
     };
@@ -541,6 +593,7 @@ function App() {
         ...selection,
         tags: criteria.tags,
         tagMode: criteria.tagMode,
+        reviewState: criteria.reviewState || undefined,
         bestOnly: criteria.bestOnly,
         limit: 25,
       });
@@ -566,6 +619,7 @@ function App() {
         code: appliedCriteria.code,
         tags: appliedCriteria.tags,
         tagMode: appliedCriteria.tagMode,
+        reviewState: appliedCriteria.reviewState || undefined,
         bestOnly: appliedCriteria.bestOnly,
         ...selection,
       });
@@ -596,6 +650,7 @@ function App() {
         dateTo: appliedCriteria.dateTo,
         tags: appliedCriteria.tags,
         tagMode: appliedCriteria.tagMode,
+        reviewState: appliedCriteria.reviewState || undefined,
         bestOnly: appliedCriteria.bestOnly,
         ...selection,
         limit: 50,
@@ -624,6 +679,7 @@ function App() {
         dateTo: criteria.dateTo,
         tags: criteria.tags,
         tagMode: criteria.tagMode,
+        reviewState: criteria.reviewState || undefined,
         bestOnly: criteria.bestOnly,
         ...selection,
         limit: 25,
@@ -695,6 +751,65 @@ function App() {
     );
   }
 
+  function changeReviewStateFilter(value: ReviewStateFilterValue) {
+    setReviewStateFilter(value);
+    runSearch(undefined, { reviewState: value }).catch((err) =>
+      setError(err instanceof Error ? err.message : "Search failed"),
+    );
+  }
+
+  function applyReviewDecision(decision: ParseReviewDecision) {
+    setDetail((current) =>
+      current?.parse_job_id === decision.parse_job_id ? { ...current, review_decision: decision } : current,
+    );
+    setResults((current) =>
+      current.map((result) =>
+        result.parse_job_id === decision.parse_job_id ? { ...result, review_decision: decision } : result,
+      ),
+    );
+    setTimeline((current) =>
+      current
+        ? {
+            ...current,
+            results: current.results.map((item) => ({
+              ...item,
+              review_decision:
+                item.best_parse_job_id === decision.parse_job_id ? decision : item.review_decision,
+              parsers: item.parsers.map((parser) =>
+                parser.parse_job_id === decision.parse_job_id
+                  ? { ...parser, review_decision: decision }
+                  : parser,
+              ),
+            })),
+          }
+        : current,
+    );
+  }
+
+  async function saveReviewDecision() {
+    if (!detail) {
+      return;
+    }
+    setReviewSaving(true);
+    try {
+      const cleanReviewer = reviewer.trim();
+      const decision = await updateParseJobReview(detail.parse_job_id, {
+        review_state: reviewFormState,
+        reviewer: cleanReviewer || null,
+        notes: reviewNotes,
+      });
+      if (cleanReviewer) {
+        window.localStorage.setItem("tdnet-reviewer", cleanReviewer);
+      }
+      setError(null);
+      applyReviewDecision(decision);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save review decision");
+    } finally {
+      setReviewSaving(false);
+    }
+  }
+
   function selectParseJob(parseJobId: number, page?: number) {
     if (detail?.parse_job_id === parseJobId && page !== undefined) {
       setPageIndex(pageIndexForPage(detail, page));
@@ -764,6 +879,17 @@ function App() {
         setDetailLoading(false);
       });
   }, [selectedId]);
+
+  useEffect(() => {
+    setReviewFormState(detail?.review_decision?.review_state ?? "needs_review");
+    setReviewNotes(detail?.review_decision?.notes ?? "");
+    setReviewer((current) => detail?.review_decision?.reviewer ?? current);
+  }, [
+    detail?.parse_job_id,
+    detail?.review_decision?.review_state,
+    detail?.review_decision?.notes,
+    detail?.review_decision?.reviewer,
+  ]);
 
   return (
     <div className="app-shell">
@@ -872,6 +998,19 @@ function App() {
               {parsers.map((option) => (
                 <option key={parserKey(option)} value={parserKey(option)}>
                   {describeParserOption(option)} · {option.parse_texts}/{option.parse_jobs}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field field-review-filter">
+            <span>Review</span>
+            <select
+              value={reviewStateFilter}
+              onChange={(event) => changeReviewStateFilter(event.target.value as ReviewStateFilterValue)}
+            >
+              {REVIEW_FILTER_OPTIONS.map((option) => (
+                <option key={option.value || "all"} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
@@ -1080,6 +1219,7 @@ function App() {
                       <span>{summarizeTimelineFiles(item)}</span>
                       <span>{summarizeTimelineParsers(item)}</span>
                       {renderFinancialFactsBadge(item.financial_facts)}
+                      {renderReviewDecisionBadge(item.review_decision)}
                     </div>
                     {item.snippet ? (
                       <div className="timeline-snippet">
@@ -1143,6 +1283,7 @@ function App() {
                 {result.financial_facts ? (
                   <div className="facts-chip-list result-facts">{renderFinancialFactsBadge(result.financial_facts)}</div>
                 ) : null}
+                <div className="review-chip-list">{renderReviewDecisionBadge(result.review_decision)}</div>
                 <div className="snippet">
                   {result.snippet ? renderHighlightedText(result.snippet, appliedCriteria.textQuery) : "No snippet available."}
                 </div>
@@ -1237,6 +1378,56 @@ function App() {
                   </a>
                 </div>
               </div>
+
+              <section className="manual-review-panel" aria-label="Manual parse review">
+                <div className="manual-review-header">
+                  <div>
+                    <strong>Manual review</strong>
+                    <span>
+                      {detail.review_decision?.reviewed_at
+                        ? `Saved ${new Date(detail.review_decision.reviewed_at).toLocaleString()}`
+                        : "No saved decision"}
+                    </span>
+                  </div>
+                  {renderReviewDecisionBadge(detail.review_decision)}
+                </div>
+                <div className="manual-review-controls">
+                  <label className="field field-review-state">
+                    <span>State</span>
+                    <select
+                      value={reviewFormState}
+                      onChange={(event) => setReviewFormState(event.target.value as ReviewState)}
+                    >
+                      {REVIEW_STATE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field reviewer-field">
+                    <span>Reviewer</span>
+                    <input value={reviewer} onChange={(event) => setReviewer(event.target.value)} />
+                  </label>
+                  <button
+                    className="icon-button primary review-save-button"
+                    type="button"
+                    disabled={reviewSaving}
+                    onClick={() => {
+                      saveReviewDecision().catch((err) =>
+                        setError(err instanceof Error ? err.message : "Failed to save review decision"),
+                      );
+                    }}
+                  >
+                    <Save size={17} />
+                    <span>{reviewSaving ? "Saving" : "Save"}</span>
+                  </button>
+                </div>
+                <label className="field review-notes">
+                  <span>Notes</span>
+                  <textarea value={reviewNotes} onChange={(event) => setReviewNotes(event.target.value)} />
+                </label>
+              </section>
 
               {renderFinancialFactsPanel(detail.financial_facts)}
 

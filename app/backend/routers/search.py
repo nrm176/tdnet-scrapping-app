@@ -13,6 +13,8 @@ from app.backend.schemas import (
     ParserOptionsResponse,
     ParserQualityResponse,
     ParseJobDetailResponse,
+    ParseReviewDecisionResponse,
+    ParseReviewUpdateRequest,
     ParseSearchResponse,
     ReportCalendarResponse,
     ReportTagsResponse,
@@ -25,7 +27,9 @@ from app.backend.services.search_service import (
     list_report_calendar_days,
     list_report_tags,
     list_parser_options,
+    normalize_review_states,
     search_parse_texts,
+    upsert_parse_job_review,
 )
 from tdnet.database import get_session
 
@@ -60,6 +64,13 @@ def _normalize_query_tags(tags: list[str] | None) -> list[str]:
     return values
 
 
+def _normalize_review_state_query(review_state: list[str] | None) -> list[str]:
+    try:
+        return normalize_review_states(review_state)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/parsers", response_model=ParserOptionsResponse)
 async def parsers(session: Annotated[AsyncSession, Depends(get_session)]) -> ParserOptionsResponse:
     return ParserOptionsResponse(parsers=await list_parser_options(session))
@@ -87,6 +98,7 @@ async def report_calendar(
     code: str | None = None,
     tags: Annotated[list[str] | None, Query()] = None,
     tag_mode: Literal["any", "all"] = "any",
+    review_state: Annotated[list[str] | None, Query()] = None,
     best_only: bool = True,
 ) -> ReportCalendarResponse:
     month_start, month_end = _month_bounds(month)
@@ -104,6 +116,7 @@ async def report_calendar(
             code=code,
             tags=_normalize_query_tags(tags),
             tag_mode=tag_mode,
+            review_states=_normalize_review_state_query(review_state),
             best_only=best_only,
         ),
     )
@@ -121,6 +134,7 @@ async def company_timeline(
     date_to: date | None = None,
     tags: Annotated[list[str] | None, Query()] = None,
     tag_mode: Literal["any", "all"] = "any",
+    review_state: Annotated[list[str] | None, Query()] = None,
     best_only: bool = True,
     order: Literal["asc", "desc"] = "desc",
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -137,6 +151,7 @@ async def company_timeline(
         date_to=date_to,
         tags=_normalize_query_tags(tags),
         tag_mode=tag_mode,
+        review_states=_normalize_review_state_query(review_state),
         best_only=best_only,
         order=order,
         limit=limit,
@@ -157,6 +172,7 @@ async def search(
     date_to: date | None = None,
     tags: Annotated[list[str] | None, Query()] = None,
     tag_mode: Literal["any", "all"] = "any",
+    review_state: Annotated[list[str] | None, Query()] = None,
     best_only: bool = True,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -173,6 +189,7 @@ async def search(
         date_to=date_to,
         tags=_normalize_query_tags(tags),
         tag_mode=tag_mode,
+        review_states=_normalize_review_state_query(review_state),
         best_only=best_only,
         limit=limit,
         offset=offset,
@@ -186,6 +203,7 @@ async def review_queue(
     parser_version: str | None = None,
     tags: Annotated[list[str] | None, Query()] = None,
     tag_mode: Literal["any", "all"] = "any",
+    review_state: Annotated[list[str] | None, Query()] = None,
     best_only: bool = True,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -196,6 +214,7 @@ async def review_queue(
         parser_version=parser_version,
         tags=_normalize_query_tags(tags),
         tag_mode=tag_mode,
+        review_states=_normalize_review_state_query(review_state),
         best_only=best_only,
         limit=limit,
         offset=offset,
@@ -211,6 +230,27 @@ async def parse_job_detail(
     if detail is None:
         raise HTTPException(status_code=404, detail="Parse job not found")
     return detail
+
+
+@router.put("/parse-jobs/{parse_job_id}/review", response_model=ParseReviewDecisionResponse)
+async def update_parse_job_review(
+    parse_job_id: int,
+    payload: ParseReviewUpdateRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ParseReviewDecisionResponse:
+    try:
+        decision = await upsert_parse_job_review(
+            session,
+            parse_job_id=parse_job_id,
+            review_state=payload.review_state,
+            reviewer=payload.reviewer,
+            notes=payload.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Parse job not found")
+    return decision
 
 
 @router.get("/parse-jobs/{parse_job_id}/page-image")
