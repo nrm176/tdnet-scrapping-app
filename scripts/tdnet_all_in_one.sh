@@ -385,7 +385,10 @@ END_DATE="$("${PYTHON}" -c 'import json,sys; print(json.loads(sys.argv[1])["end"
 CHECKPOINT_START_DATE="$("${PYTHON}" -c 'import json,sys; print(json.loads(sys.argv[1])["checkpoint_start"] or "")' "${DATE_JSON}")"
 CHECKPOINT_APPLIED="$("${PYTHON}" -c 'import json,sys; print(str(json.loads(sys.argv[1])["checkpoint_applied"]).lower())' "${DATE_JSON}")"
 
-mapfile -t DATES < <("${PYTHON}" -c 'import json,sys; sys.stdout.write("\n".join(json.loads(sys.argv[1])["dates"]))' "${DATE_JSON}")
+DATES=()
+while IFS= read -r scrape_date || [[ -n "${scrape_date}" ]]; do
+  DATES+=("${scrape_date}")
+done < <("${PYTHON}" -c 'import json,sys; sys.stdout.write("\n".join(json.loads(sys.argv[1])["dates"]))' "${DATE_JSON}")
 
 if [[ -n "${CHECKPOINT_LATEST_DATE}" ]]; then
   log "CHECKPOINT source=postgres latest_disclosure_date=${CHECKPOINT_LATEST_DATE} lookback_days=${SCRAPE_LOOKBACK_DAYS} checkpoint_start=${CHECKPOINT_START_DATE} requested_start=${REQUESTED_START_DATE} effective_start=${START_DATE} end=${END_DATE} applied=${CHECKPOINT_APPLIED}"
