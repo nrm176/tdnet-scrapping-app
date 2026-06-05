@@ -103,8 +103,10 @@ http://127.0.0.1:5173/
 
 The backend exposes `/api/search`, `/api/parsers`, `/api/parser-quality`,
 `/api/companies/{code}/timeline`, `/api/parse-jobs/{id}`, and
-`/api/parse-jobs/{id}/page-image`. On Postgres it prepares `pg_trgm` indexes for
-Japanese-friendly substring search over `document_parse_texts.content_text`.
+`/api/parse-jobs/{id}/page-image`. It also accepts
+`PUT /api/parse-jobs/{id}/review` from the review workbench to persist manual
+parse decisions. On Postgres it prepares `pg_trgm` indexes for Japanese-friendly
+substring search over `document_parse_texts.content_text`.
 
 ## CLI usage
 
@@ -232,6 +234,14 @@ tdnet analyze-financials --retry-failed --limit 100
 The review app surfaces these persisted `financial_facts` rows in parse-job
 detail, search results, and company timelines. Empty, pending/running, failed,
 and completed analysis states remain read-only in the UI.
+
+Manual parser review decisions are stored separately in
+`document_parse_reviews`. The review workbench can mark a parse job as
+`needs_review`, `accepted`, `bad_parse`, `prefer_ocr`, or `prefer_ixbrl`, save
+reviewer notes, and filter search/calendar/timeline views by review state or
+computed `unreviewed` rows. These decisions never delete parser artifacts; they
+only annotate the preferred or rejected parser output and can influence
+best-parser selection in the UI.
 
 Parsing uses worker processes for CPU-bound PDF extraction. By default,
 `tdnet parse` uses the detected CPU count; pass `--workers 16` on a 16-core
@@ -361,6 +371,9 @@ Reports are written under `parse-reviews/<timestamp>/index.html`, with PNG page
 renders in the report's `assets/` directory. The `suspicious` strategy ranks
 documents using lightweight quality hints such as low text volume, sparse
 multi-page output, missing page JSON, and large PDFs with little extracted text.
+The generated report remains useful for offline QA snapshots; durable decisions
+should be saved through the review workbench so they persist in
+`document_parse_reviews` and can be filtered later.
 
 ## CI and distribution
 

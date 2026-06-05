@@ -29,7 +29,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -246,7 +247,8 @@ select {
   display: grid;
   grid-template-columns:
     minmax(180px, 1.05fr) minmax(220px, 1.3fr) minmax(170px, 0.95fr)
-    minmax(120px, 0.5fr) minmax(82px, 0.45fr) minmax(132px, 0.55fr) minmax(132px, 0.55fr) auto;
+    minmax(128px, 0.58fr) minmax(120px, 0.5fr) minmax(82px, 0.45fr) minmax(132px, 0.55fr)
+    minmax(132px, 0.55fr) auto;
   gap: 10px;
   align-items: end;
 }
@@ -264,19 +266,32 @@ select {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
-  height: 36px;
   border: 1px solid #c3ccd8;
   border-radius: 6px;
-  padding: 0 10px;
   background: #ffffff;
   color: #17202a;
   outline: none;
 }
 
+.field input,
+.field select {
+  height: 36px;
+  padding: 0 10px;
+}
+
+.field textarea {
+  min-height: 58px;
+  resize: vertical;
+  padding: 8px 10px;
+  line-height: 1.4;
+}
+
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   border-color: #0f766e;
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
 }
@@ -895,6 +910,13 @@ select {
   gap: 5px;
 }
 
+.review-chip-list {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
 .fact-chip {
   max-width: 100%;
   overflow: hidden;
@@ -908,6 +930,47 @@ select {
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.review-state-chip {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid #d1d8e2;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #435166;
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-state-chip.unreviewed {
+  border-color: #d7dee7;
+  background: #f8fafc;
+  color: #64707d;
+}
+
+.review-state-chip.needs-review {
+  border-color: #f0d58c;
+  background: #fffbeb;
+  color: #8a5b00;
+}
+
+.review-state-chip.accepted,
+.review-state-chip.prefer-ocr,
+.review-state-chip.prefer-ixbrl {
+  border-color: #9ac2bd;
+  background: #e9f7f4;
+  color: #0b615b;
+}
+
+.review-state-chip.bad-parse {
+  border-color: #f6c5a2;
+  background: #fff7ed;
+  color: #9f580a;
 }
 
 .fact-chip.completed {
@@ -1048,7 +1111,7 @@ select {
 .review-pane {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto auto 1fr;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   background: #f5f6f8;
 }
 
@@ -1079,6 +1142,60 @@ select {
 
 .document-meta {
   margin-top: 5px;
+}
+
+.manual-review-panel {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.62fr) minmax(300px, 1fr);
+  gap: 8px 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #d8dee6;
+  background: #ffffff;
+}
+
+.manual-review-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.manual-review-header div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.manual-review-header strong {
+  color: #17202a;
+  font-size: 13px;
+}
+
+.manual-review-header span {
+  min-width: 0;
+  overflow: hidden;
+  color: #64707d;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manual-review-controls {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(130px, 0.85fr) minmax(130px, 0.75fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.review-save-button {
+  min-width: 82px;
+}
+
+.review-notes {
+  grid-column: 1 / -1;
 }
 
 .facts-panel {
@@ -1273,6 +1390,10 @@ select {
   .review-grid {
     grid-template-columns: minmax(320px, 48%) minmax(360px, 52%);
   }
+
+  .manual-review-panel {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 940px) {
@@ -1315,6 +1436,7 @@ select {
   .field-title-query,
   .field-text-query,
   .field-parser,
+  .field-review-filter,
   .field-best-only {
     grid-column: auto;
   }
@@ -1387,6 +1509,7 @@ select {
   .field-title-query,
   .field-text-query,
   .field-parser,
+  .field-review-filter,
   .field-best-only,
   .search-actions {
     grid-column: auto;
@@ -1422,9 +1545,14 @@ select {
   }
 
   .document-header,
+  .manual-review-controls,
   .page-toolbar {
     flex-wrap: wrap;
     height: auto;
+  }
+
+  .manual-review-controls {
+    grid-template-columns: 1fr;
   }
 
   .facts-header,

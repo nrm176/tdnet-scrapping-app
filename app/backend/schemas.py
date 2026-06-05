@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+ReviewState = Literal["needs_review", "accepted", "bad_parse", "prefer_ocr", "prefer_ixbrl"]
 
 
 class HealthResponse(BaseModel):
@@ -134,6 +137,24 @@ class FinancialFactsAnalysisResponse(BaseModel):
     facts: list[FinancialFactResponse] = Field(default_factory=list)
 
 
+class ParseReviewDecisionResponse(BaseModel):
+    id: int
+    disclosure_id: str
+    parse_job_id: int
+    review_state: ReviewState
+    reviewer: str | None
+    notes: str
+    reviewed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ParseReviewUpdateRequest(BaseModel):
+    review_state: ReviewState
+    reviewer: str | None = Field(default=None, max_length=128)
+    notes: str = Field(default="", max_length=4000)
+
+
 class CompanyTimelineFileResponse(BaseModel):
     file_id: int
     file_type: str
@@ -157,6 +178,7 @@ class CompanyTimelineParserResponse(BaseModel):
     has_text: bool
     last_parse_error: str | None
     financial_facts: FinancialFactsAnalysisResponse | None = None
+    review_decision: ParseReviewDecisionResponse | None = None
 
 
 class CompanyTimelineDisclosureResponse(BaseModel):
@@ -172,6 +194,7 @@ class CompanyTimelineDisclosureResponse(BaseModel):
     parsers: list[CompanyTimelineParserResponse] = Field(default_factory=list)
     best_parse_job_id: int | None
     financial_facts: FinancialFactsAnalysisResponse | None = None
+    review_decision: ParseReviewDecisionResponse | None = None
     snippet: str
 
 
@@ -207,6 +230,7 @@ class ParseSearchResult(BaseModel):
     tags: list[ReportTagAssignmentResponse] = Field(default_factory=list)
     matched_pages: list[ParsedPageMatchResponse] = Field(default_factory=list)
     financial_facts: FinancialFactsAnalysisResponse | None = None
+    review_decision: ParseReviewDecisionResponse | None = None
 
 
 class ParseSearchResponse(BaseModel):

@@ -1,11 +1,14 @@
 import type {
   CompanyTimelineResponse,
+  ParseReviewDecision,
   ParseJobDetail,
   ParseSearchResponse,
   ParserOption,
   ParserQuality,
   ReportCalendarResponse,
   ReportTag,
+  ReviewState,
+  ReviewStateFilter,
 } from "./types";
 
 type SearchParams = {
@@ -19,6 +22,7 @@ type SearchParams = {
   dateTo?: string;
   tags?: string[];
   tagMode?: "any" | "all";
+  reviewState?: ReviewStateFilter;
   bestOnly?: boolean;
   limit?: number;
   offset?: number;
@@ -34,6 +38,7 @@ type CalendarParams = {
   code?: string;
   tags?: string[];
   tagMode?: "any" | "all";
+  reviewState?: ReviewStateFilter;
   bestOnly?: boolean;
 };
 
@@ -47,14 +52,21 @@ type CompanyTimelineParams = {
   dateTo?: string;
   tags?: string[];
   tagMode?: "any" | "all";
+  reviewState?: ReviewStateFilter;
   bestOnly?: boolean;
   order?: "asc" | "desc";
   limit?: number;
   offset?: number;
 };
 
-async function requestJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+type ParseReviewUpdate = {
+  review_state: ReviewState;
+  reviewer?: string | null;
+  notes?: string;
+};
+
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
   if (!response.ok) {
     const text = await response.text();
     let message = text || response.statusText;
@@ -112,6 +124,7 @@ export async function searchParseTexts(params: SearchParams): Promise<ParseSearc
   appendOptional(query, "date_to", params.dateTo);
   appendOptionalList(query, "tags", params.tags);
   appendOptional(query, "tag_mode", params.tagMode);
+  appendOptional(query, "review_state", params.reviewState);
   appendOptional(query, "best_only", params.bestOnly === false ? "false" : undefined);
   appendOptional(query, "limit", params.limit ?? 25);
   appendOptional(query, "offset", params.offset ?? 0);
@@ -124,6 +137,7 @@ export async function fetchReviewQueue(params: SearchParams): Promise<ParseSearc
   appendOptional(query, "parser_version", params.parserVersion);
   appendOptionalList(query, "tags", params.tags);
   appendOptional(query, "tag_mode", params.tagMode);
+  appendOptional(query, "review_state", params.reviewState);
   appendOptional(query, "best_only", params.bestOnly === false ? "false" : undefined);
   appendOptional(query, "limit", params.limit ?? 25);
   appendOptional(query, "offset", params.offset ?? 0);
@@ -141,6 +155,7 @@ export async function fetchReportCalendar(params: CalendarParams): Promise<Repor
   appendOptional(query, "code", params.code?.trim());
   appendOptionalList(query, "tags", params.tags);
   appendOptional(query, "tag_mode", params.tagMode);
+  appendOptional(query, "review_state", params.reviewState);
   appendOptional(query, "best_only", params.bestOnly === false ? "false" : undefined);
   return requestJson<ReportCalendarResponse>(`/api/calendar?${query.toString()}`);
 }
@@ -156,6 +171,7 @@ export async function fetchCompanyTimeline(params: CompanyTimelineParams): Promi
   appendOptional(query, "date_to", params.dateTo);
   appendOptionalList(query, "tags", params.tags);
   appendOptional(query, "tag_mode", params.tagMode);
+  appendOptional(query, "review_state", params.reviewState);
   appendOptional(query, "best_only", params.bestOnly === false ? "false" : undefined);
   appendOptional(query, "order", params.order ?? "desc");
   appendOptional(query, "limit", params.limit ?? 50);
@@ -165,6 +181,19 @@ export async function fetchCompanyTimeline(params: CompanyTimelineParams): Promi
 
 export async function fetchParseJob(parseJobId: number): Promise<ParseJobDetail> {
   return requestJson<ParseJobDetail>(`/api/parse-jobs/${parseJobId}`);
+}
+
+export async function updateParseJobReview(
+  parseJobId: number,
+  payload: ParseReviewUpdate,
+): Promise<ParseReviewDecision> {
+  return requestJson<ParseReviewDecision>(`/api/parse-jobs/${parseJobId}/review`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
 }
 
 export function pageImageUrl(parseJobId: number, page: number): string {
