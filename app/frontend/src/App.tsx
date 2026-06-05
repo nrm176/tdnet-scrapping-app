@@ -27,6 +27,9 @@ import {
 import type {
   CompanyTimelineDisclosure,
   CompanyTimelineResponse,
+  FinancialFact,
+  FinancialFactsAnalysis,
+  FinancialFactValue,
   ParseJobDetail,
   ParseSearchResult,
   ParserOption,
@@ -163,6 +166,175 @@ function summarizeTimelineParsers(item: CompanyTimelineDisclosure): string {
   ]
     .filter(Boolean)
     .join(" · ") || `${formatNumber(item.parsers.length)} parser jobs`;
+}
+
+const METRIC_LABELS: Record<string, string> = {
+  dividend_per_share: "Dividend/share",
+  eps: "EPS",
+  net_income: "Net income",
+  net_sales: "Net sales",
+  operating_profit: "Operating profit",
+  ordinary_profit: "Ordinary profit",
+};
+
+const ROW_KIND_LABELS: Record<string, string> = {
+  actual_result: "Actual",
+  change_amount: "Change",
+  change_percent: "Change %",
+  current_forecast: "Current",
+  previous_forecast: "Previous",
+};
+
+function formatMetricKey(value: string | null | undefined): string {
+  if (!value) {
+    return "Metric";
+  }
+  return METRIC_LABELS[value] ?? value.replaceAll("_", " ");
+}
+
+function formatRowKind(value: string | null | undefined): string {
+  if (!value) {
+    return "Row";
+  }
+  return ROW_KIND_LABELS[value] ?? value.replaceAll("_", " ");
+}
+
+function financialFactStatusClass(analysis: FinancialFactsAnalysis | null): string {
+  if (!analysis) {
+    return "empty";
+  }
+  if (analysis.status === "completed") {
+    return analysis.summary.fact_count > 0 ? "completed" : "empty";
+  }
+  if (analysis.status === "failed") {
+    return "failed";
+  }
+  return "pending";
+}
+
+function financialFactBadgeText(analysis: FinancialFactsAnalysis): string {
+  if (analysis.status !== "completed") {
+    return `Facts ${analysis.status}`;
+  }
+  if (analysis.summary.fact_count === 0) {
+    return "Facts 0";
+  }
+  return analysis.summary.has_forecast_revision
+    ? `Facts ${formatNumber(analysis.summary.fact_count)} · Forecast revision`
+    : `Facts ${formatNumber(analysis.summary.fact_count)}`;
+}
+
+function formatFactValue(value: FinancialFactValue): string {
+  const rawValue = value.raw ?? value.value;
+  const valueText = rawValue === undefined || rawValue === null || rawValue === "" ? "-" : String(rawValue);
+  const metric = typeof value.metric === "string" ? value.metric : null;
+  const metricLabel = typeof value.metric_label_ja === "string" ? value.metric_label_ja : formatMetricKey(metric);
+  return metric || value.metric_label_ja ? `${metricLabel} ${valueText}` : valueText;
+}
+
+function summarizeFactValues(fact: FinancialFact): string {
+  if (!fact.values.length) {
+    return "-";
+  }
+  return fact.values.slice(0, 5).map(formatFactValue).join(" · ");
+}
+
+function sourceLabel(fact: FinancialFact): string {
+  if (!fact.source) {
+    return "";
+  }
+  return fact.source.line_index ? `Line ${fact.source.line_index}: ${fact.source.text}` : fact.source.text;
+}
+
+function renderFinancialFactsBadge(analysis: FinancialFactsAnalysis | null): ReactNode {
+  if (!analysis) {
+    return null;
+  }
+  return (
+    <span
+      className={`fact-chip ${financialFactStatusClass(analysis)}`}
+      title={`${analysis.analyzer_name} · ${compactVersion(analysis.analyzer_version)}`}
+    >
+      {financialFactBadgeText(analysis)}
+    </span>
+  );
+}
+
+function renderFinancialFactsPanel(analysis: FinancialFactsAnalysis | null): ReactNode {
+  const statusClass = financialFactStatusClass(analysis);
+  const forecastFacts = analysis?.facts.filter((fact) => fact.type === "forecast_revision_row") ?? [];
+  const metricFacts = analysis?.facts.filter((fact) => fact.type === "metric_row") ?? [];
+  const sourceFacts = (analysis?.facts ?? []).filter((fact) => fact.source).slice(0, 3);
+
+  return (
+    <section className={`facts-panel ${statusClass}`} aria-label="Financial facts">
+      <div className="facts-header">
+        <div className="facts-title">
+          <strong>Financial facts</strong>
+          <span>
+            {analysis
+              ? `${analysis.status} · ${analysis.analyzer_name} · ${compactVersion(analysis.analyzer_version)}`
+              : "No analysis row"}
+          </span>
+        </div>
+        <div className="facts-chip-list">
+          {analysis ? (
+            <>
+              <span className={`fact-chip ${statusClass}`}>{financialFactBadgeText(analysis)}</span>
+              <span className="fact-chip">Forecast rows {formatNumber(analysis.summary.forecast_revision_rows)}</span>
+              {analysis.summary.metric_keys.slice(0, 4).map((metric) => (
+                <span className="fact-chip" key={metric}>
+                  {formatMetricKey(metric)}
+                </span>
+              ))}
+            </>
+          ) : (
+            <span className="fact-chip empty">Not analyzed</span>
+          )}
+        </div>
+      </div>
+
+      {!analysis ? <div className="facts-message">No financial fact analysis exists for this parser output.</div> : null}
+      {analysis?.status === "failed" ? (
+        <div className="facts-message">{analysis.last_analysis_error || "Analysis failed without an error message."}</div>
+      ) : null}
+      {analysis && analysis.status !== "completed" && analysis.status !== "failed" ? (
+        <div className="facts-message">Analysis is {analysis.status}.</div>
+      ) : null}
+
+      {analysis?.status === "completed" && analysis.summary.fact_count > 0 ? (
+        <div className="facts-body">
+          {forecastFacts.length ? (
+            <div className="facts-table" aria-label="Forecast revision facts">
+              {forecastFacts.slice(0, 5).map((fact, index) => (
+                <div className="facts-row" key={`forecast-${index}`}>
+                  <strong>{formatRowKind(fact.row_kind)}</strong>
+                  <span>{summarizeFactValues(fact)}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {metricFacts.length ? (
+            <div className="facts-table compact" aria-label="Metric facts">
+              {metricFacts.slice(0, 4).map((fact, index) => (
+                <div className="facts-row" key={`metric-${index}`}>
+                  <strong>{fact.metric_label_ja || formatMetricKey(fact.metric)}</strong>
+                  <span>{summarizeFactValues(fact)}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {sourceFacts.length ? (
+            <div className="facts-sources" aria-label="Financial fact source lines">
+              {sourceFacts.map((fact, index) => (
+                <span key={`source-${index}`}>{sourceLabel(fact)}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
 }
 
 function formatDateKey(date: Date): string {
@@ -907,6 +1079,7 @@ function App() {
                     <div className="timeline-row-meta">
                       <span>{summarizeTimelineFiles(item)}</span>
                       <span>{summarizeTimelineParsers(item)}</span>
+                      {renderFinancialFactsBadge(item.financial_facts)}
                     </div>
                     {item.snippet ? (
                       <div className="timeline-snippet">
@@ -966,6 +1139,9 @@ function App() {
                       </span>
                     ))}
                   </div>
+                ) : null}
+                {result.financial_facts ? (
+                  <div className="facts-chip-list result-facts">{renderFinancialFactsBadge(result.financial_facts)}</div>
                 ) : null}
                 <div className="snippet">
                   {result.snippet ? renderHighlightedText(result.snippet, appliedCriteria.textQuery) : "No snippet available."}
@@ -1061,6 +1237,8 @@ function App() {
                   </a>
                 </div>
               </div>
+
+              {renderFinancialFactsPanel(detail.financial_facts)}
 
               <div className="page-toolbar">
                 <button

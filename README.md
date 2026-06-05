@@ -229,6 +229,10 @@ tdnet analyze-financials --limit 1000
 tdnet analyze-financials --retry-failed --limit 100
 ```
 
+The review app surfaces these persisted `financial_facts` rows in parse-job
+detail, search results, and company timelines. Empty, pending/running, failed,
+and completed analysis states remain read-only in the UI.
+
 Parsing uses worker processes for CPU-bound PDF extraction. By default,
 `tdnet parse` uses the detected CPU count; pass `--workers 16` on a 16-core
 machine to be explicit, or lower it if `pymupdf-layout` memory use is high.

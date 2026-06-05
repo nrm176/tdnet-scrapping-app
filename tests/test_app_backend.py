@@ -15,10 +15,11 @@ from app.backend.services.search_service import (
     list_report_tags,
     search_parse_texts,
 )
+from tdnet.financial_facts import FINANCIAL_FACTS_ANALYSIS_TYPE, FINANCIAL_FACTS_ANALYZER_NAME, extract_financial_facts
 from tdnet.models import TdnetDisclosure
 from tdnet.ixbrl_text import IXBRL_TEXT_PARSER_NAME
 from tdnet.ocr import APPLE_VISION_OCR_NAME, get_apple_vision_parser_version
-from tdnet.orm import Base, DisclosureRecord, DocumentParseJobRecord
+from tdnet.orm import Base, DisclosureRecord, DocumentAnalysisResultRecord, DocumentParseJobRecord
 from tdnet.parsers import PARSER_NAME, get_parser_version
 from tdnet.repository import complete_disclosure_file, get_or_create_disclosure_file, upsert_disclosures, upsert_parse_text
 from tdnet.tagging import tag_reports
@@ -85,6 +86,27 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
             char_count=len(text),
             content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         )
+        analysis_json = extract_financial_facts(
+            title=disclosure.title,
+            content_text=text,
+            disclosure_id=disclosure.id,
+            code=disclosure.code,
+            disclosure_date=disclosure.disclosure_date,
+            analyzer_version="test-analyzer",
+        )
+        session.add(
+            DocumentAnalysisResultRecord(
+                file_id=file_record.id,
+                parse_job_id=parse_job.id,
+                analysis_type=FINANCIAL_FACTS_ANALYSIS_TYPE,
+                analyzer_name=FINANCIAL_FACTS_ANALYZER_NAME,
+                analyzer_version="test-analyzer",
+                status="completed",
+                result_json=analysis_json,
+                result_text="financial_facts fact_count=1",
+            )
+        )
+        await session.commit()
         await tag_reports(
             session,
             parser_name="apple-vision-ocr",
@@ -139,6 +161,8 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
     assert options[0].parse_texts == 1
     assert response.total == 1
     assert response.results[0].code == "85600"
+    assert response.results[0].financial_facts is not None
+    assert response.results[0].financial_facts.summary.has_forecast_revision is True
     assert "18,000" in response.results[0].snippet
     assert response.results[0].matched_pages[0].page == 1
     assert "18,000" in response.results[0].matched_pages[0].snippet
@@ -154,6 +178,10 @@ async def test_search_parse_texts_finds_japanese_body_text(tmp_path):
     assert any(tag.slug == "forecast_revision" and tag.assignment_count == 1 for tag in tag_options)
     assert detail is not None
     assert detail.tags[0].slug == "forecast_revision"
+    assert detail.financial_facts is not None
+    assert detail.financial_facts.status == "completed"
+    assert detail.financial_facts.summary.fact_count > 0
+    assert detail.financial_facts.facts[0].source is not None
     assert detail.pages[0].page == 1
     assert detail.content_text == text
     await engine.dispose()
@@ -259,6 +287,21 @@ async def test_company_timeline_includes_lineage_and_filters(tmp_path):
         )
         session.add(failed_job)
         await session.commit()
+        await session.refresh(failed_job)
+        session.add(
+            DocumentAnalysisResultRecord(
+                file_id=pending_file.id,
+                parse_job_id=failed_job.id,
+                analysis_type=FINANCIAL_FACTS_ANALYSIS_TYPE,
+                analyzer_name=FINANCIAL_FACTS_ANALYZER_NAME,
+                analyzer_version="test-analyzer",
+                status="failed",
+                result_json={"unexpected": "shape"},
+                result_text=None,
+                last_analysis_error="facts extraction failed",
+            )
+        )
+        await session.commit()
         await tag_reports(
             session,
             parser_name="apple-vision-ocr",
@@ -293,6 +336,7 @@ async def test_company_timeline_includes_lineage_and_filters(tmp_path):
     assert parsed_item.files[0].download_status == "completed"
     assert parsed_item.parsers[0].parser_name == "apple-vision-ocr"
     assert parsed_item.parsers[0].has_text is True
+    assert parsed_item.financial_facts is None
     assert parsed_item.tags[0].slug == "forecast_revision"
     assert "18,000" in parsed_item.snippet
 
@@ -300,6 +344,10 @@ async def test_company_timeline_includes_lineage_and_filters(tmp_path):
     assert unparsed_item.files[0].download_status == "pending"
     assert unparsed_item.parsers[0].parse_status == "failed"
     assert unparsed_item.parsers[0].last_parse_error == "layout failed"
+    assert unparsed_item.parsers[0].financial_facts is not None
+    assert unparsed_item.parsers[0].financial_facts.status == "failed"
+    assert unparsed_item.parsers[0].financial_facts.summary.fact_count == 0
+    assert unparsed_item.parsers[0].financial_facts.last_analysis_error == "facts extraction failed"
     assert unparsed_item.best_parse_job_id is None
 
     assert text_filtered.total == 1

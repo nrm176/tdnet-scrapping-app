@@ -97,6 +97,43 @@ class ReportTagAssignmentResponse(BaseModel):
     source: str
 
 
+class FinancialFactSummaryResponse(BaseModel):
+    fact_count: int = Field(ge=0)
+    metric_keys: list[str] = Field(default_factory=list)
+    forecast_revision_rows: int = Field(ge=0)
+    has_forecast_revision: bool
+
+
+class FinancialFactSourceResponse(BaseModel):
+    line_index: int | None
+    text: str
+
+
+class FinancialFactResponse(BaseModel):
+    type: str
+    row_kind: str | None = None
+    metric: str | None = None
+    metric_label_ja: str | None = None
+    unit: str | None = None
+    values: list[dict[str, object]] = Field(default_factory=list)
+    source: FinancialFactSourceResponse | None = None
+    confidence: float | None = None
+
+
+class FinancialFactsAnalysisResponse(BaseModel):
+    analysis_id: int
+    file_id: int
+    parse_job_id: int | None
+    status: str
+    analyzer_name: str
+    analyzer_version: str
+    analyzed_at: datetime | None
+    last_analysis_error: str | None
+    result_text: str | None
+    summary: FinancialFactSummaryResponse
+    facts: list[FinancialFactResponse] = Field(default_factory=list)
+
+
 class CompanyTimelineFileResponse(BaseModel):
     file_id: int
     file_type: str
@@ -119,6 +156,7 @@ class CompanyTimelineParserResponse(BaseModel):
     char_count: int | None
     has_text: bool
     last_parse_error: str | None
+    financial_facts: FinancialFactsAnalysisResponse | None = None
 
 
 class CompanyTimelineDisclosureResponse(BaseModel):
@@ -133,6 +171,7 @@ class CompanyTimelineDisclosureResponse(BaseModel):
     files: list[CompanyTimelineFileResponse] = Field(default_factory=list)
     parsers: list[CompanyTimelineParserResponse] = Field(default_factory=list)
     best_parse_job_id: int | None
+    financial_facts: FinancialFactsAnalysisResponse | None = None
     snippet: str
 
 
@@ -167,6 +206,7 @@ class ParseSearchResult(BaseModel):
     snippet: str
     tags: list[ReportTagAssignmentResponse] = Field(default_factory=list)
     matched_pages: list[ParsedPageMatchResponse] = Field(default_factory=list)
+    financial_facts: FinancialFactsAnalysisResponse | None = None
 
 
 class ParseSearchResponse(BaseModel):
