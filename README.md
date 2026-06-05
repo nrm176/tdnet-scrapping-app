@@ -53,12 +53,19 @@ GET  /health
 GET  /disclosures?date=2026-05-15
 GET  /disclosures?from=2026-05-01&to=2026-05-15
 GET  /disclosures/{id}
+GET  /disclosures/{id}/parser-status
+GET  /disclosures/{id}/lineage
 GET  /disclosure-files?download_status=completed
 GET  /companies/{code}/disclosures
+GET  /companies/{code}/timeline
+GET  /parser-quality
+GET  /tags
 ```
 
 The API has no auth in v1 and is read-only. Use the CLI to ingest data into
-PostgreSQL, download source files, and parse completed PDF downloads.
+PostgreSQL, download source files, and parse completed PDF downloads. The
+lineage and summary endpoints connect disclosures to downloaded files, parser
+jobs, persisted parse text, deterministic tags, and downstream analysis results.
 
 ## Review web app
 
