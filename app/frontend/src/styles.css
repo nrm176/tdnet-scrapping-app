@@ -246,7 +246,7 @@ select {
   display: grid;
   grid-template-columns:
     minmax(180px, 1.05fr) minmax(220px, 1.3fr) minmax(170px, 0.95fr)
-    minmax(82px, 0.45fr) minmax(132px, 0.55fr) minmax(132px, 0.55fr) auto;
+    minmax(120px, 0.5fr) minmax(82px, 0.45fr) minmax(132px, 0.55fr) minmax(132px, 0.55fr) auto;
   gap: 10px;
   align-items: end;
 }
@@ -279,6 +279,39 @@ select {
 .field select:focus {
   border-color: #0f766e;
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
+.checkbox-field {
+  min-width: 0;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid #c3ccd8;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #344052;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.checkbox-field input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #0f766e;
+}
+
+.checkbox-field span {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  text-overflow: ellipsis;
 }
 
 .search-actions {
@@ -909,6 +942,45 @@ select {
   -webkit-box-orient: vertical;
 }
 
+.search-hit {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: #fef08a;
+  color: #17202a;
+}
+
+.page-match-list,
+.page-toolbar-matches {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.page-match-button {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border: 1px solid #b9d5d1;
+  border-radius: 6px;
+  background: #f5fffd;
+  color: #0b615b;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.page-match-button:hover,
+.page-match-button.selected {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
 .empty-state,
 .empty-review,
 .loading-state {
@@ -968,6 +1040,10 @@ select {
   background: #fbfcfd;
   color: #52606f;
   font-size: 13px;
+}
+
+.page-toolbar-matches {
+  margin-left: 4px;
 }
 
 .review-grid {
@@ -1080,7 +1156,8 @@ select {
 
   .field-title-query,
   .field-text-query,
-  .field-parser {
+  .field-parser,
+  .field-best-only {
     grid-column: auto;
   }
 
@@ -1152,6 +1229,7 @@ select {
   .field-title-query,
   .field-text-query,
   .field-parser,
+  .field-best-only,
   .search-actions {
     grid-column: auto;
   }

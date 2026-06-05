@@ -14,6 +14,7 @@ from app.backend.schemas import (
     CompanyTimelineFileResponse,
     CompanyTimelineParserResponse,
     CompanyTimelineResponse,
+    ParsedPageMatchResponse,
     ParsedPageResponse,
     ParserFallbackCandidate,
     ParserOption,
@@ -100,6 +101,31 @@ def _extract_pages(pages_json: dict | None) -> list[ParsedPageResponse]:
     return pages
 
 
+def _find_page_matches(
+    pages_json: dict | None,
+    query: str | None,
+    *,
+    limit: int = 3,
+) -> list[ParsedPageMatchResponse]:
+    if not query:
+        return []
+
+    matches: list[ParsedPageMatchResponse] = []
+    lowered_query = query.lower()
+    for page in _extract_pages(pages_json):
+        if lowered_query not in page.markdown.lower():
+            continue
+        matches.append(
+            ParsedPageMatchResponse(
+                page=page.page,
+                snippet=_make_snippet(page.markdown, query, radius=90),
+            )
+        )
+        if len(matches) >= limit:
+            break
+    return matches
+
+
 def _base_join() -> Select:
     return (
         select(DocumentParseJobRecord, DocumentParseTextRecord, DisclosureFileRecord, DisclosureRecord)
@@ -154,12 +180,13 @@ def _apply_filters(
     date_to: date | None = None,
     tags: Sequence[str] | None = None,
     tag_mode: TagMode = "any",
+    best_only: bool = True,
 ) -> Select:
     if parser_name:
         stmt = stmt.where(DocumentParseJobRecord.parser_name == parser_name)
     if parser_version:
         stmt = stmt.where(DocumentParseJobRecord.parser_version == parser_version)
-    if not parser_name and not parser_version:
+    if best_only and not parser_name and not parser_version:
         stmt = _prefer_best_parse_per_file(stmt)
     if code:
         stmt = stmt.where(DisclosureRecord.code == code.strip().upper())
@@ -239,6 +266,7 @@ def _row_to_result(
         parsed_at=parse_job.parsed_at,
         snippet=_make_snippet(parse_text.content_text, snippet_query or query),
         tags=tags or [],
+        matched_pages=_find_page_matches(parse_text.pages_json, snippet_query or query),
     )
 
 
@@ -516,6 +544,7 @@ async def search_parse_texts(
     date_to: date | None = None,
     tags: Sequence[str] | None = None,
     tag_mode: TagMode = "any",
+    best_only: bool = True,
     limit: int = 25,
     offset: int = 0,
 ) -> ParseSearchResponse:
@@ -534,6 +563,7 @@ async def search_parse_texts(
         date_to=date_to,
         tags=tags,
         tag_mode=tag_mode,
+        best_only=best_only,
     )
     count_stmt = filtered.with_only_columns(func.count()).order_by(None)
     total = int(await session.scalar(count_stmt) or 0)
@@ -582,6 +612,7 @@ async def get_company_timeline(
     date_to: date | None = None,
     tags: Sequence[str] | None = None,
     tag_mode: TagMode = "any",
+    best_only: bool = True,
     order: Literal["asc", "desc"] = "desc",
     limit: int = 50,
     offset: int = 0,
@@ -613,6 +644,7 @@ async def get_company_timeline(
             date_to=date_to,
             tags=tags,
             tag_mode=tag_mode,
+            best_only=best_only,
         )
         matching_disclosure_ids = parse_filter.with_only_columns(DisclosureRecord.id).distinct().subquery()
         disclosure_stmt = disclosure_stmt.where(
@@ -774,6 +806,7 @@ async def list_report_calendar_days(
     code: str | None = None,
     tags: Sequence[str] | None = None,
     tag_mode: TagMode = "any",
+    best_only: bool = True,
 ) -> list[ReportCalendarDay]:
     record_stmt = (
         select(
@@ -810,6 +843,7 @@ async def list_report_calendar_days(
         date_to=month_end,
         tags=tags,
         tag_mode=tag_mode,
+        best_only=best_only,
     )
     stmt = (
         filtered.with_only_columns(

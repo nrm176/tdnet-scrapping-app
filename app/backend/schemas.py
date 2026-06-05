@@ -145,6 +145,11 @@ class CompanyTimelineResponse(BaseModel):
     results: list[CompanyTimelineDisclosureResponse]
 
 
+class ParsedPageMatchResponse(BaseModel):
+    page: int
+    snippet: str
+
+
 class ParseSearchResult(BaseModel):
     parse_job_id: int
     file_id: int
@@ -161,6 +166,7 @@ class ParseSearchResult(BaseModel):
     parsed_at: datetime | None
     snippet: str
     tags: list[ReportTagAssignmentResponse] = Field(default_factory=list)
+    matched_pages: list[ParsedPageMatchResponse] = Field(default_factory=list)
 
 
 class ParseSearchResponse(BaseModel):

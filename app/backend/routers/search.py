@@ -87,6 +87,7 @@ async def report_calendar(
     code: str | None = None,
     tags: Annotated[list[str] | None, Query()] = None,
     tag_mode: Literal["any", "all"] = "any",
+    best_only: bool = True,
 ) -> ReportCalendarResponse:
     month_start, month_end = _month_bounds(month)
     return ReportCalendarResponse(
@@ -103,6 +104,7 @@ async def report_calendar(
             code=code,
             tags=_normalize_query_tags(tags),
             tag_mode=tag_mode,
+            best_only=best_only,
         ),
     )
 
@@ -119,6 +121,7 @@ async def company_timeline(
     date_to: date | None = None,
     tags: Annotated[list[str] | None, Query()] = None,
     tag_mode: Literal["any", "all"] = "any",
+    best_only: bool = True,
     order: Literal["asc", "desc"] = "desc",
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -134,6 +137,7 @@ async def company_timeline(
         date_to=date_to,
         tags=_normalize_query_tags(tags),
         tag_mode=tag_mode,
+        best_only=best_only,
         order=order,
         limit=limit,
         offset=offset,
@@ -153,6 +157,7 @@ async def search(
     date_to: date | None = None,
     tags: Annotated[list[str] | None, Query()] = None,
     tag_mode: Literal["any", "all"] = "any",
+    best_only: bool = True,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ParseSearchResponse:
@@ -168,6 +173,7 @@ async def search(
         date_to=date_to,
         tags=_normalize_query_tags(tags),
         tag_mode=tag_mode,
+        best_only=best_only,
         limit=limit,
         offset=offset,
     )
@@ -180,6 +186,7 @@ async def review_queue(
     parser_version: str | None = None,
     tags: Annotated[list[str] | None, Query()] = None,
     tag_mode: Literal["any", "all"] = "any",
+    best_only: bool = True,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ParseSearchResponse:
@@ -189,6 +196,7 @@ async def review_queue(
         parser_version=parser_version,
         tags=_normalize_query_tags(tags),
         tag_mode=tag_mode,
+        best_only=best_only,
         limit=limit,
         offset=offset,
     )

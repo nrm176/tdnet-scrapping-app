@@ -19,6 +19,7 @@ type SearchParams = {
   dateTo?: string;
   tags?: string[];
   tagMode?: "any" | "all";
+  bestOnly?: boolean;
   limit?: number;
   offset?: number;
 };
@@ -33,6 +34,7 @@ type CalendarParams = {
   code?: string;
   tags?: string[];
   tagMode?: "any" | "all";
+  bestOnly?: boolean;
 };
 
 type CompanyTimelineParams = {
@@ -45,6 +47,7 @@ type CompanyTimelineParams = {
   dateTo?: string;
   tags?: string[];
   tagMode?: "any" | "all";
+  bestOnly?: boolean;
   order?: "asc" | "desc";
   limit?: number;
   offset?: number;
@@ -109,6 +112,7 @@ export async function searchParseTexts(params: SearchParams): Promise<ParseSearc
   appendOptional(query, "date_to", params.dateTo);
   appendOptionalList(query, "tags", params.tags);
   appendOptional(query, "tag_mode", params.tagMode);
+  appendOptional(query, "best_only", params.bestOnly === false ? "false" : undefined);
   appendOptional(query, "limit", params.limit ?? 25);
   appendOptional(query, "offset", params.offset ?? 0);
   return requestJson<ParseSearchResponse>(`/api/search?${query.toString()}`);
@@ -120,6 +124,7 @@ export async function fetchReviewQueue(params: SearchParams): Promise<ParseSearc
   appendOptional(query, "parser_version", params.parserVersion);
   appendOptionalList(query, "tags", params.tags);
   appendOptional(query, "tag_mode", params.tagMode);
+  appendOptional(query, "best_only", params.bestOnly === false ? "false" : undefined);
   appendOptional(query, "limit", params.limit ?? 25);
   appendOptional(query, "offset", params.offset ?? 0);
   return requestJson<ParseSearchResponse>(`/api/review-queue?${query.toString()}`);
@@ -136,6 +141,7 @@ export async function fetchReportCalendar(params: CalendarParams): Promise<Repor
   appendOptional(query, "code", params.code?.trim());
   appendOptionalList(query, "tags", params.tags);
   appendOptional(query, "tag_mode", params.tagMode);
+  appendOptional(query, "best_only", params.bestOnly === false ? "false" : undefined);
   return requestJson<ReportCalendarResponse>(`/api/calendar?${query.toString()}`);
 }
 
@@ -150,6 +156,7 @@ export async function fetchCompanyTimeline(params: CompanyTimelineParams): Promi
   appendOptional(query, "date_to", params.dateTo);
   appendOptionalList(query, "tags", params.tags);
   appendOptional(query, "tag_mode", params.tagMode);
+  appendOptional(query, "best_only", params.bestOnly === false ? "false" : undefined);
   appendOptional(query, "order", params.order ?? "desc");
   appendOptional(query, "limit", params.limit ?? 50);
   appendOptional(query, "offset", params.offset ?? 0);
