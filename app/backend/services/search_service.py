@@ -18,6 +18,7 @@ from app.backend.schemas import (
     FinancialFactResponse,
     FinancialFactSourceResponse,
     FinancialFactSummaryResponse,
+    FinancialMetricDeltaResponse,
     ParseReviewDecisionResponse,
     ParsedPageMatchResponse,
     ParsedPageResponse,
@@ -350,11 +351,25 @@ def _safe_int(value: object, default: int = 0) -> int:
     return default
 
 
+def _safe_number(value: object) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return value
+    if isinstance(value, str):
+        try:
+            return float(value) if "." in value else int(value)
+        except ValueError:
+            return None
+    return None
+
+
 def _financial_fact_summary(result_json: dict | None) -> FinancialFactSummaryResponse:
     summary = result_json.get("summary") if isinstance(result_json, dict) else None
     if not isinstance(summary, dict):
         return FinancialFactSummaryResponse(
             fact_count=0,
+            metric_delta_count=0,
             metric_keys=[],
             forecast_revision_rows=0,
             has_forecast_revision=False,
@@ -362,6 +377,7 @@ def _financial_fact_summary(result_json: dict | None) -> FinancialFactSummaryRes
     metric_keys = summary.get("metric_keys")
     return FinancialFactSummaryResponse(
         fact_count=max(0, _safe_int(summary.get("fact_count"))),
+        metric_delta_count=max(0, _safe_int(summary.get("metric_delta_count"))),
         metric_keys=sorted(str(metric) for metric in metric_keys) if isinstance(metric_keys, list) else [],
         forecast_revision_rows=max(0, _safe_int(summary.get("forecast_revision_rows"))),
         has_forecast_revision=bool(summary.get("has_forecast_revision")),
@@ -405,6 +421,53 @@ def _financial_fact_rows(result_json: dict | None) -> list[FinancialFactResponse
     return facts
 
 
+def _financial_metric_delta_rows(result_json: dict | None) -> list[FinancialMetricDeltaResponse]:
+    raw_deltas = result_json.get("metric_deltas") if isinstance(result_json, dict) else None
+    if not isinstance(raw_deltas, list):
+        return []
+
+    deltas: list[FinancialMetricDeltaResponse] = []
+    for raw_delta in raw_deltas:
+        if not isinstance(raw_delta, dict):
+            continue
+        confidence = raw_delta.get("confidence")
+        deltas.append(
+            FinancialMetricDeltaResponse(
+                type=str(raw_delta.get("type") or "metric_delta"),
+                metric=str(raw_delta["metric"]) if raw_delta.get("metric") is not None else None,
+                metric_label_ja=str(raw_delta["metric_label_ja"])
+                if raw_delta.get("metric_label_ja") is not None
+                else None,
+                unit=str(raw_delta["unit"]) if raw_delta.get("unit") is not None else None,
+                period=str(raw_delta["period"]) if raw_delta.get("period") is not None else None,
+                comparison_period=str(raw_delta["comparison_period"])
+                if raw_delta.get("comparison_period") is not None
+                else None,
+                comparison_basis=str(raw_delta["comparison_basis"])
+                if raw_delta.get("comparison_basis") is not None
+                else None,
+                current_value=_safe_number(raw_delta.get("current_value")),
+                current_raw=str(raw_delta["current_raw"]) if raw_delta.get("current_raw") is not None else None,
+                comparison_value=_safe_number(raw_delta.get("comparison_value")),
+                comparison_raw=str(raw_delta["comparison_raw"])
+                if raw_delta.get("comparison_raw") is not None
+                else None,
+                change_value=_safe_number(raw_delta.get("change_value")),
+                reported_change_pct=_safe_number(raw_delta.get("reported_change_pct")),
+                reported_change_pct_raw=str(raw_delta["reported_change_pct_raw"])
+                if raw_delta.get("reported_change_pct_raw") is not None
+                else None,
+                computed_change_pct=_safe_number(raw_delta.get("computed_change_pct")),
+                change_pct_source=str(raw_delta["change_pct_source"])
+                if raw_delta.get("change_pct_source") is not None
+                else None,
+                source=_financial_fact_source(raw_delta.get("source")),
+                confidence=float(confidence) if isinstance(confidence, int | float) else None,
+            )
+        )
+    return deltas
+
+
 def _financial_facts_response(
     record: DocumentAnalysisResultRecord,
     *,
@@ -423,6 +486,7 @@ def _financial_facts_response(
         result_text=record.result_text,
         summary=_financial_fact_summary(result_json),
         facts=_financial_fact_rows(result_json) if include_facts else [],
+        metric_deltas=_financial_metric_delta_rows(result_json) if include_facts else [],
     )
 
 

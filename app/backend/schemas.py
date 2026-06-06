@@ -102,6 +102,7 @@ class ReportTagAssignmentResponse(BaseModel):
 
 class FinancialFactSummaryResponse(BaseModel):
     fact_count: int = Field(ge=0)
+    metric_delta_count: int = Field(default=0, ge=0)
     metric_keys: list[str] = Field(default_factory=list)
     forecast_revision_rows: int = Field(ge=0)
     has_forecast_revision: bool
@@ -123,6 +124,27 @@ class FinancialFactResponse(BaseModel):
     confidence: float | None = None
 
 
+class FinancialMetricDeltaResponse(BaseModel):
+    type: str
+    metric: str | None = None
+    metric_label_ja: str | None = None
+    unit: str | None = None
+    period: str | None = None
+    comparison_period: str | None = None
+    comparison_basis: str | None = None
+    current_value: int | float | None = None
+    current_raw: str | None = None
+    comparison_value: int | float | None = None
+    comparison_raw: str | None = None
+    change_value: int | float | None = None
+    reported_change_pct: int | float | None = None
+    reported_change_pct_raw: str | None = None
+    computed_change_pct: int | float | None = None
+    change_pct_source: str | None = None
+    source: FinancialFactSourceResponse | None = None
+    confidence: float | None = None
+
+
 class FinancialFactsAnalysisResponse(BaseModel):
     analysis_id: int
     file_id: int
@@ -135,6 +157,7 @@ class FinancialFactsAnalysisResponse(BaseModel):
     result_text: str | None
     summary: FinancialFactSummaryResponse
     facts: list[FinancialFactResponse] = Field(default_factory=list)
+    metric_deltas: list[FinancialMetricDeltaResponse] = Field(default_factory=list)
 
 
 class ParseReviewDecisionResponse(BaseModel):
