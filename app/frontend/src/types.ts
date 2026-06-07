@@ -261,3 +261,63 @@ export type ParseJobDetail = ParseSearchResult & {
   content_text: string;
   pages: ParsedPage[];
 };
+
+export type PipelineRunStatus = "running" | "completed" | "failed";
+
+export type PipelineStepStatus = PipelineRunStatus | "skipped";
+
+export type PipelineRunStep = {
+  id: number;
+  run_id: string;
+  step_name: string;
+  step_order: number;
+  status: PipelineStepStatus;
+  command: string | null;
+  reason: string | null;
+  metrics: Record<string, unknown>;
+  error_context: string | null;
+  exit_code: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+};
+
+export type PipelineRunSummary = {
+  run_id: string;
+  status: PipelineRunStatus;
+  requested_start_date: string | null;
+  effective_start_date: string | null;
+  end_date: string | null;
+  date_count: number;
+  checkpoint_applied: boolean;
+  checkpoint_disabled_reason: string | null;
+  options: Record<string, unknown>;
+  limits: Record<string, unknown>;
+  strategies: Record<string, unknown>;
+  skip_flags: Record<string, unknown>;
+  log_path: string;
+  latest_log_path: string | null;
+  started_at: string;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  failed_step: string | null;
+  exit_code: number | null;
+  last_error: string | null;
+  step_count: number;
+  completed_steps: number;
+  failed_steps: number;
+  skipped_steps: number;
+};
+
+export type PipelineRunsResponse = {
+  total: number;
+  limit: number;
+  offset: number;
+  runs: PipelineRunSummary[];
+};
+
+export type PipelineRunDetail = PipelineRunSummary & {
+  checkpoint_latest_date: string | null;
+  checkpoint_start_date: string | null;
+  steps: PipelineRunStep[];
+};

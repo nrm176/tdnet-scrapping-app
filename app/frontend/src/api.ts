@@ -1,5 +1,7 @@
 import type {
   CompanyTimelineResponse,
+  PipelineRunDetail,
+  PipelineRunsResponse,
   ParseReviewDecision,
   ParseJobDetail,
   ParseSearchResponse,
@@ -63,6 +65,12 @@ type ParseReviewUpdate = {
   review_state: ReviewState;
   reviewer?: string | null;
   notes?: string;
+};
+
+type PipelineRunParams = {
+  status?: "running" | "completed" | "failed";
+  limit?: number;
+  offset?: number;
 };
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -194,6 +202,18 @@ export async function updateParseJobReview(
     },
     body: JSON.stringify(payload),
   });
+}
+
+export async function fetchPipelineRuns(params: PipelineRunParams = {}): Promise<PipelineRunsResponse> {
+  const query = new URLSearchParams();
+  appendOptional(query, "status", params.status);
+  appendOptional(query, "limit", params.limit ?? 25);
+  appendOptional(query, "offset", params.offset ?? 0);
+  return requestJson<PipelineRunsResponse>(`/api/pipeline-runs?${query.toString()}`);
+}
+
+export async function fetchPipelineRun(runId: string): Promise<PipelineRunDetail> {
+  return requestJson<PipelineRunDetail>(`/api/pipeline-runs/${encodeURIComponent(runId)}`);
 }
 
 export function pageImageUrl(parseJobId: number, page: number): string {

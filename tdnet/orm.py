@@ -271,6 +271,93 @@ class DocumentAnalysisResultRecord(Base):
     parse_job: Mapped[DocumentParseJobRecord | None] = relationship(back_populates="analysis_results")
 
 
+class PipelineRunRecord(Base):
+    __tablename__ = "pipeline_runs"
+    __table_args__ = (
+        Index("ix_pipeline_runs_status_started", "status", "started_at"),
+        Index("ix_pipeline_runs_started", "started_at"),
+    )
+
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    requested_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    checkpoint_latest_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    checkpoint_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    checkpoint_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    checkpoint_disabled_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    options_json: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+    limits_json: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+    strategies_json: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+    skip_flags_json: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+    log_path: Mapped[str] = mapped_column(Text, nullable=False)
+    latest_log_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    elapsed_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    failed_step: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    steps: Mapped[list["PipelineRunStepRecord"]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+
+class PipelineRunStepRecord(Base):
+    __tablename__ = "pipeline_run_steps"
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_name", name="uq_pipeline_run_steps_run_step"),
+        Index("ix_pipeline_run_steps_run_order", "run_id", "step_order"),
+        Index("ix_pipeline_run_steps_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("pipeline_runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    step_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    step_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+    command: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metrics_json: Mapped[dict | None] = mapped_column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
+    error_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    elapsed_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    run: Mapped[PipelineRunRecord] = relationship(back_populates="steps")
+
+
 class ReportTagRecord(Base):
     __tablename__ = "tdnet_report_tags"
     __table_args__ = (

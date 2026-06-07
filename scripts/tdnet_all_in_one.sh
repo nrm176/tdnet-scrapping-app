@@ -137,6 +137,12 @@ LATEST_LOG="logs/tdnet-all-in-one-latest.log"
 PIPELINE_STARTED_EPOCH="$(date '+%s')"
 STEP_STARTED_EPOCH="${PIPELINE_STARTED_EPOCH}"
 CURRENT_STEP="initializing"
+CURRENT_STEP_ORDER=""
+PIPELINE_STEP_ORDER="0"
+PIPELINE_HISTORY_ENABLED="false"
+LAST_COMMAND_TEXT=""
+LAST_COMMAND_EXIT_CODE=""
+LAST_COMMAND_METRICS_FILE=""
 
 ln -sfn "$(basename "${PIPELINE_LOG}")" "${LATEST_LOG}"
 
@@ -149,16 +155,41 @@ format_duration() {
   printf '%02d:%02d:%02d' "$((seconds / 3600))" "$(((seconds % 3600) / 60))" "$((seconds % 60))"
 }
 
+record_pipeline_history() {
+  local history_exit
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    return 0
+  fi
+  if [[ ! -x "${TDNET:-}" ]]; then
+    return 0
+  fi
+  set +e
+  "${TDNET}" pipeline-run "$@" 2>>"${PIPELINE_LOG}"
+  history_exit="$?"
+  set -e
+  if [[ "${history_exit}" -ne 0 ]]; then
+    log "PIPELINE_HISTORY_FAIL action=$1 exit_code=${history_exit}"
+  fi
+}
+
 finish_pipeline() {
   local exit_code=$?
   local finished_epoch
   local elapsed_seconds
+  local failed_step
   finished_epoch="$(date '+%s')"
   elapsed_seconds="$((finished_epoch - PIPELINE_STARTED_EPOCH))"
   if [[ "${exit_code}" -eq 0 ]]; then
     log "TDnet all-in-one pipeline finished run_id=${RUN_ID} status=success elapsed_seconds=${elapsed_seconds} elapsed=$(format_duration "${elapsed_seconds}")"
+    if [[ "${PIPELINE_HISTORY_ENABLED}" == "true" ]]; then
+      record_pipeline_history finish --run-id "${RUN_ID}" --status completed --elapsed-seconds "${elapsed_seconds}" --exit-code "${exit_code}"
+    fi
   else
     log "TDnet all-in-one pipeline failed run_id=${RUN_ID} status=failed step=${CURRENT_STEP} exit_code=${exit_code} elapsed_seconds=${elapsed_seconds} elapsed=$(format_duration "${elapsed_seconds}")"
+    if [[ "${PIPELINE_HISTORY_ENABLED}" == "true" ]]; then
+      failed_step="${CURRENT_STEP}"
+      record_pipeline_history finish --run-id "${RUN_ID}" --status failed --elapsed-seconds "${elapsed_seconds}" --failed-step "${failed_step}" --exit-code "${exit_code}"
+    fi
   fi
   log "Pipeline log: ${PIPELINE_LOG}"
   log "Latest log: ${LATEST_LOG}"
@@ -168,8 +199,17 @@ trap finish_pipeline EXIT
 
 start_step() {
   CURRENT_STEP="$1"
+  CURRENT_STEP_ORDER=""
+  LAST_COMMAND_TEXT=""
+  LAST_COMMAND_EXIT_CODE=""
+  LAST_COMMAND_METRICS_FILE=""
   STEP_STARTED_EPOCH="$(date '+%s')"
   log "STEP_START name=${CURRENT_STEP}"
+  if [[ "${PIPELINE_HISTORY_ENABLED}" == "true" ]]; then
+    PIPELINE_STEP_ORDER="$((PIPELINE_STEP_ORDER + 1))"
+    CURRENT_STEP_ORDER="${PIPELINE_STEP_ORDER}"
+    record_pipeline_history step-start --run-id "${RUN_ID}" --step-name "${CURRENT_STEP}" --step-order "${CURRENT_STEP_ORDER}"
+  fi
 }
 
 finish_step() {
@@ -178,11 +218,29 @@ finish_step() {
   finished_epoch="$(date '+%s')"
   elapsed_seconds="$((finished_epoch - STEP_STARTED_EPOCH))"
   log "STEP_FINISH name=${CURRENT_STEP} elapsed_seconds=${elapsed_seconds} elapsed=$(format_duration "${elapsed_seconds}")"
+  if [[ "${PIPELINE_HISTORY_ENABLED}" == "true" && -n "${CURRENT_STEP_ORDER}" ]]; then
+    record_pipeline_history step-finish \
+      --run-id "${RUN_ID}" \
+      --step-name "${CURRENT_STEP}" \
+      --status completed \
+      --elapsed-seconds "${elapsed_seconds}" \
+      --exit-code "${LAST_COMMAND_EXIT_CODE:-0}" \
+      --command "${LAST_COMMAND_TEXT}" \
+      --metrics-file "${LAST_COMMAND_METRICS_FILE}"
+  fi
+  if [[ -n "${LAST_COMMAND_METRICS_FILE}" ]]; then
+    rm -f "${LAST_COMMAND_METRICS_FILE}"
+  fi
   CURRENT_STEP="idle"
+  CURRENT_STEP_ORDER=""
 }
 
 skip_step() {
   log "STEP_SKIP name=$1 reason=$2"
+  if [[ "${PIPELINE_HISTORY_ENABLED}" == "true" ]]; then
+    PIPELINE_STEP_ORDER="$((PIPELINE_STEP_ORDER + 1))"
+    record_pipeline_history step-skip --run-id "${RUN_ID}" --step-name "$1" --step-order "${PIPELINE_STEP_ORDER}" --reason "$2"
+  fi
 }
 
 run() {
@@ -190,23 +248,44 @@ run() {
   local command_started_epoch
   local command_finished_epoch
   local elapsed_seconds
+  local step_elapsed_seconds
   local exit_code
+  local command_output
   printf -v command_text '%q ' "$@"
   command_text="${command_text% }"
+  LAST_COMMAND_TEXT="${command_text}"
+  LAST_COMMAND_EXIT_CODE=""
+  LAST_COMMAND_METRICS_FILE=""
   command_started_epoch="$(date '+%s')"
   log "COMMAND_START step=${CURRENT_STEP} command=${command_text}"
   if [[ "${DRY_RUN}" == "true" ]]; then
     log "COMMAND_DRY_RUN step=${CURRENT_STEP} command=${command_text}"
+    LAST_COMMAND_EXIT_CODE="0"
     return 0
   fi
+  command_output="$(mktemp "${TMPDIR:-/tmp}/tdnet-pipeline-step.XXXXXX")"
+  LAST_COMMAND_METRICS_FILE="${command_output}"
   set +e
-  "$@" 2>&1 | tee -a "${PIPELINE_LOG}"
+  "$@" 2>&1 | tee -a "${PIPELINE_LOG}" | tee "${command_output}"
   exit_code="${PIPESTATUS[0]}"
   set -e
+  LAST_COMMAND_EXIT_CODE="${exit_code}"
   command_finished_epoch="$(date '+%s')"
   elapsed_seconds="$((command_finished_epoch - command_started_epoch))"
   if [[ "${exit_code}" -ne 0 ]]; then
     log "COMMAND_FAIL step=${CURRENT_STEP} exit_code=${exit_code} elapsed_seconds=${elapsed_seconds} elapsed=$(format_duration "${elapsed_seconds}") command=${command_text}"
+    if [[ "${PIPELINE_HISTORY_ENABLED}" == "true" && -n "${CURRENT_STEP_ORDER}" ]]; then
+      step_elapsed_seconds="$((command_finished_epoch - STEP_STARTED_EPOCH))"
+      record_pipeline_history step-finish \
+        --run-id "${RUN_ID}" \
+        --step-name "${CURRENT_STEP}" \
+        --status failed \
+        --elapsed-seconds "${step_elapsed_seconds}" \
+        --exit-code "${exit_code}" \
+        --command "${command_text}" \
+        --metrics-file "${command_output}"
+    fi
+    rm -f "${command_output}"
     return "${exit_code}"
   fi
   log "COMMAND_FINISH step=${CURRENT_STEP} exit_code=0 elapsed_seconds=${elapsed_seconds} elapsed=$(format_duration "${elapsed_seconds}") command=${command_text}"
@@ -403,6 +482,116 @@ if ((${#DATES[@]} > 0)); then
 else
   log "Date range: no dates to scrape after checkpoint requested_start=${REQUESTED_START_DATE} effective_start=${START_DATE} end=${END_DATE}"
 fi
+
+PIPELINE_OPTIONS_JSON="$("${PYTHON}" - \
+  "${DAYS}" \
+  "${FORCE_SCRAPE}" \
+  "${SCRAPE_LOOKBACK_DAYS}" \
+  "${RETRY_FAILED}" \
+  "${RETAG}" \
+  "${WITH_OCR}" \
+  "${WITH_IXBRL}" \
+  "${WITH_REVIEW}" \
+  "${DRY_RUN}" <<'PY'
+import json
+import sys
+
+print(
+    json.dumps(
+        {
+            "days": int(sys.argv[1]),
+            "force_scrape": sys.argv[2] == "true",
+            "scrape_lookback_days": int(sys.argv[3]),
+            "retry_failed": sys.argv[4] == "true",
+            "retag": sys.argv[5] == "true",
+            "with_ocr": sys.argv[6] == "true",
+            "with_ixbrl": sys.argv[7] == "true",
+            "with_review": sys.argv[8] == "true",
+            "dry_run": sys.argv[9] == "true",
+        },
+        sort_keys=True,
+    )
+)
+PY
+)"
+PIPELINE_LIMITS_JSON="$("${PYTHON}" - \
+  "${DOWNLOAD_LIMIT}" \
+  "${DOWNLOAD_CONCURRENCY}" \
+  "${PARSE_LIMIT}" \
+  "${PARSE_WORKERS}" \
+  "${PARSE_TEXT_LIMIT}" \
+  "${TAG_LIMIT}" \
+  "${OCR_LIMIT}" \
+  "${OCR_WORKERS}" \
+  "${IXBRL_LIMIT}" \
+  "${REVIEW_LIMIT}" <<'PY'
+import json
+import sys
+
+
+def optional_int(value: str) -> int | None:
+    return int(value) if value else None
+
+
+print(
+    json.dumps(
+        {
+            "download": int(sys.argv[1]),
+            "download_concurrency": int(sys.argv[2]),
+            "parse": int(sys.argv[3]),
+            "parse_workers": optional_int(sys.argv[4]),
+            "parse_text": int(sys.argv[5]),
+            "tag": int(sys.argv[6]),
+            "ocr": int(sys.argv[7]),
+            "ocr_workers": int(sys.argv[8]),
+            "ixbrl": int(sys.argv[9]),
+            "review": int(sys.argv[10]),
+        },
+        sort_keys=True,
+    )
+)
+PY
+)"
+PIPELINE_STRATEGIES_JSON="$("${PYTHON}" - "${IXBRL_STRATEGY}" "${REVIEW_STRATEGY}" <<'PY'
+import json
+import sys
+
+print(json.dumps({"ixbrl": sys.argv[1], "review": sys.argv[2]}, sort_keys=True))
+PY
+)"
+PIPELINE_SKIP_FLAGS_JSON="$("${PYTHON}" - \
+  "${SKIP_INSTALL}" \
+  "${SKIP_POSTGRES}" \
+  "${SKIP_SCRAPE}" \
+  "${SKIP_DOWNLOAD}" \
+  "${SKIP_PARSE}" \
+  "${SKIP_PARSE_TEXT}" \
+  "${SKIP_TAG}" <<'PY'
+import json
+import sys
+
+names = ["install", "postgres", "scrape", "download", "parse", "parse_text", "tag"]
+print(json.dumps({name: value == "true" for name, value in zip(names, sys.argv[1:])}, sort_keys=True))
+PY
+)"
+
+record_pipeline_history start \
+  --run-id "${RUN_ID}" \
+  --log-path "${PIPELINE_LOG}" \
+  --latest-log-path "${LATEST_LOG}" \
+  --requested-start-date "${REQUESTED_START_DATE}" \
+  --effective-start-date "${START_DATE}" \
+  --end-date "${END_DATE}" \
+  --date-count "${#DATES[@]}" \
+  --checkpoint-latest-date "${CHECKPOINT_LATEST_DATE}" \
+  --checkpoint-start-date "${CHECKPOINT_START_DATE}" \
+  --checkpoint-applied "${CHECKPOINT_APPLIED}" \
+  --checkpoint-disabled-reason "${CHECKPOINT_DISABLED_REASON}" \
+  --options-json "${PIPELINE_OPTIONS_JSON}" \
+  --limits-json "${PIPELINE_LIMITS_JSON}" \
+  --strategies-json "${PIPELINE_STRATEGIES_JSON}" \
+  --skip-flags-json "${PIPELINE_SKIP_FLAGS_JSON}"
+PIPELINE_HISTORY_ENABLED="true"
 CURRENT_STEP="idle"
 
 if [[ "${SKIP_SCRAPE}" != "true" ]]; then

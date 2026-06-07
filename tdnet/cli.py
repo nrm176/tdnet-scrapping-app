@@ -25,6 +25,15 @@ from .models import TdnetDisclosure, TdnetScrapingResult
 from .ocr import APPLE_VISION_OCR_NAME, get_apple_vision_parser_version, ocr_pending_files
 from .parse_texts import backfill_parse_texts
 from .parsers import PARSER_NAME, default_parse_workers, get_parser_version, parse_pending_files
+from .pipeline_runs import (
+    error_context_from_file,
+    finish_pipeline_run,
+    finish_pipeline_step,
+    parse_step_metrics_file,
+    skip_pipeline_step,
+    start_pipeline_run,
+    start_pipeline_step,
+)
 from .repository import count_disclosures, query_disclosures, upsert_disclosures
 from .review import build_parse_review_report
 from .services import scrape_tdnet_by_date
@@ -99,6 +108,27 @@ def _resolve_parser_version(parser_name: str, parser_version: str | None) -> str
     if parser_name == PARSER_NAME:
         return get_parser_version()
     return None
+
+
+def _parse_optional_json(value: str | None) -> dict[str, object]:
+    if not value:
+        return {}
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError("JSON payload must be an object")
+    return parsed
+
+
+def _parse_optional_date(value: str | None) -> date | None:
+    return _parse_date(value) if value else None
+
+
+def _parse_bool(value: str | bool | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "y"}
 
 
 async def _persist_result(result: TdnetScrapingResult) -> int:
@@ -506,6 +536,90 @@ async def _list_report_tags(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _pipeline_run_start(args: argparse.Namespace) -> int:
+    await init_db()
+    async with SessionLocal() as session:
+        await start_pipeline_run(
+            session,
+            run_id=args.run_id,
+            log_path=args.log_path,
+            latest_log_path=args.latest_log_path,
+            requested_start_date=_parse_optional_date(args.requested_start_date),
+            effective_start_date=_parse_optional_date(args.effective_start_date),
+            end_date=_parse_optional_date(args.end_date),
+            date_count=args.date_count,
+            checkpoint_latest_date=_parse_optional_date(args.checkpoint_latest_date),
+            checkpoint_start_date=_parse_optional_date(args.checkpoint_start_date),
+            checkpoint_applied=_parse_bool(args.checkpoint_applied),
+            checkpoint_disabled_reason=args.checkpoint_disabled_reason or None,
+            options=_parse_optional_json(args.options_json),
+            limits=_parse_optional_json(args.limits_json),
+            strategies=_parse_optional_json(args.strategies_json),
+            skip_flags=_parse_optional_json(args.skip_flags_json),
+        )
+    return 0
+
+
+async def _pipeline_run_finish(args: argparse.Namespace) -> int:
+    await init_db()
+    async with SessionLocal() as session:
+        await finish_pipeline_run(
+            session,
+            run_id=args.run_id,
+            status=args.status,
+            elapsed_seconds=args.elapsed_seconds,
+            failed_step=args.failed_step,
+            exit_code=args.exit_code,
+            last_error=args.last_error,
+        )
+    return 0
+
+
+async def _pipeline_step_start(args: argparse.Namespace) -> int:
+    await init_db()
+    async with SessionLocal() as session:
+        await start_pipeline_step(
+            session,
+            run_id=args.run_id,
+            step_name=args.step_name,
+            step_order=args.step_order,
+        )
+    return 0
+
+
+async def _pipeline_step_finish(args: argparse.Namespace) -> int:
+    await init_db()
+    error_context = args.error_context
+    if not error_context and args.status == "failed":
+        error_context = error_context_from_file(args.metrics_file)
+    async with SessionLocal() as session:
+        await finish_pipeline_step(
+            session,
+            run_id=args.run_id,
+            step_name=args.step_name,
+            status=args.status,
+            elapsed_seconds=args.elapsed_seconds,
+            exit_code=args.exit_code,
+            command=args.command,
+            metrics=parse_step_metrics_file(args.metrics_file),
+            error_context=error_context,
+        )
+    return 0
+
+
+async def _pipeline_step_skip(args: argparse.Namespace) -> int:
+    await init_db()
+    async with SessionLocal() as session:
+        await skip_pipeline_step(
+            session,
+            run_id=args.run_id,
+            step_name=args.step_name,
+            step_order=args.step_order,
+            reason=args.reason,
+        )
+    return 0
+
+
 def _run_scrape(args: argparse.Namespace) -> int:
     logging.info("Starting scrape date=%s persist=%s", args.date, args.persist)
     result = scrape_tdnet_by_date(args.date)
@@ -733,6 +847,63 @@ def _build_parser() -> argparse.ArgumentParser:
     list_tags_parser.add_argument("--counts", action="store_true")
     list_tags_parser.add_argument("--json", action="store_true")
     list_tags_parser.set_defaults(handler=lambda args: asyncio.run(_list_report_tags(args)))
+
+    pipeline_parser = subparsers.add_parser(
+        "pipeline-run",
+        help=argparse.SUPPRESS,
+    )
+    pipeline_subparsers = pipeline_parser.add_subparsers(dest="pipeline_action", required=True)
+
+    pipeline_start = pipeline_subparsers.add_parser("start")
+    pipeline_start.add_argument("--run-id", required=True)
+    pipeline_start.add_argument("--log-path", required=True)
+    pipeline_start.add_argument("--latest-log-path")
+    pipeline_start.add_argument("--requested-start-date")
+    pipeline_start.add_argument("--effective-start-date")
+    pipeline_start.add_argument("--end-date")
+    pipeline_start.add_argument("--date-count", type=int, default=0)
+    pipeline_start.add_argument("--checkpoint-latest-date")
+    pipeline_start.add_argument("--checkpoint-start-date")
+    pipeline_start.add_argument("--checkpoint-applied", default="false")
+    pipeline_start.add_argument("--checkpoint-disabled-reason")
+    pipeline_start.add_argument("--options-json")
+    pipeline_start.add_argument("--limits-json")
+    pipeline_start.add_argument("--strategies-json")
+    pipeline_start.add_argument("--skip-flags-json")
+    pipeline_start.set_defaults(handler=lambda args: asyncio.run(_pipeline_run_start(args)))
+
+    pipeline_finish = pipeline_subparsers.add_parser("finish")
+    pipeline_finish.add_argument("--run-id", required=True)
+    pipeline_finish.add_argument("--status", choices=["completed", "failed"], required=True)
+    pipeline_finish.add_argument("--elapsed-seconds", type=float)
+    pipeline_finish.add_argument("--failed-step")
+    pipeline_finish.add_argument("--exit-code", type=int)
+    pipeline_finish.add_argument("--last-error")
+    pipeline_finish.set_defaults(handler=lambda args: asyncio.run(_pipeline_run_finish(args)))
+
+    pipeline_step_start = pipeline_subparsers.add_parser("step-start")
+    pipeline_step_start.add_argument("--run-id", required=True)
+    pipeline_step_start.add_argument("--step-name", required=True)
+    pipeline_step_start.add_argument("--step-order", type=int, required=True)
+    pipeline_step_start.set_defaults(handler=lambda args: asyncio.run(_pipeline_step_start(args)))
+
+    pipeline_step_finish = pipeline_subparsers.add_parser("step-finish")
+    pipeline_step_finish.add_argument("--run-id", required=True)
+    pipeline_step_finish.add_argument("--step-name", required=True)
+    pipeline_step_finish.add_argument("--status", choices=["completed", "failed"], required=True)
+    pipeline_step_finish.add_argument("--elapsed-seconds", type=float)
+    pipeline_step_finish.add_argument("--exit-code", type=int)
+    pipeline_step_finish.add_argument("--command")
+    pipeline_step_finish.add_argument("--metrics-file")
+    pipeline_step_finish.add_argument("--error-context")
+    pipeline_step_finish.set_defaults(handler=lambda args: asyncio.run(_pipeline_step_finish(args)))
+
+    pipeline_step_skip = pipeline_subparsers.add_parser("step-skip")
+    pipeline_step_skip.add_argument("--run-id", required=True)
+    pipeline_step_skip.add_argument("--step-name", required=True)
+    pipeline_step_skip.add_argument("--step-order", type=int, required=True)
+    pipeline_step_skip.add_argument("--reason", required=True)
+    pipeline_step_skip.set_defaults(handler=lambda args: asyncio.run(_pipeline_step_skip(args)))
 
     review_parser = subparsers.add_parser(
         "review-parse",
