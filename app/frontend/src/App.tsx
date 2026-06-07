@@ -84,16 +84,18 @@ type SearchCriteriaOverrides = Partial<Omit<SearchCriteria, "tags">> & {
 };
 
 type ReviewStateFilterValue = "" | ReviewStateFilter;
-type AppView = "documents" | "parserQuality" | "pipeline";
+type AppView = "documents" | "timeline" | "parserQuality" | "pipeline";
 
 const VIEW_LABELS: Record<AppView, string> = {
   documents: "Documents",
+  timeline: "Timeline",
   parserQuality: "Parser Quality",
   pipeline: "Runs",
 };
 
 const VIEW_DESCRIPTIONS: Record<AppView, string> = {
   documents: "Search persisted parse text and inspect parser output against the source PDF.",
+  timeline: "Inspect company-level TDnet disclosure history and jump back into document review.",
   parserQuality: "Inspect parser health, low-text outputs, fallback candidates, and recent parser errors.",
   pipeline: "Inspect persisted all-in-one pipeline runs and step metrics.",
 };
@@ -659,6 +661,7 @@ function App() {
   const [reviewStateFilter, setReviewStateFilter] = useState<ReviewStateFilterValue>("");
   const [calendarMonth, setCalendarMonth] = useState(currentMonthKey());
   const [calendarDays, setCalendarDays] = useState<ReportCalendarDay[]>([]);
+  const [timelineDraftCode, setTimelineDraftCode] = useState("");
   const [timelineCode, setTimelineCode] = useState("");
   const [timeline, setTimeline] = useState<CompanyTimelineResponse | null>(null);
   const [results, setResults] = useState<ParseSearchResult[]>([]);
@@ -769,7 +772,13 @@ function App() {
   );
   const latestParserError = parserQuality?.recent_errors[0] ?? null;
   const appShellClass =
-    activeView === "documents" ? "documents-shell" : activeView === "parserQuality" ? "quality-shell" : "pipeline-shell";
+    activeView === "documents"
+      ? "documents-shell"
+      : activeView === "timeline"
+        ? "timeline-shell"
+        : activeView === "parserQuality"
+          ? "quality-shell"
+          : "pipeline-shell";
 
   function buildCriteria(overrides: SearchCriteriaOverrides = {}): SearchCriteria {
     return {
@@ -1161,7 +1170,13 @@ function App() {
   }
 
   function openCompanyTimeline(nextCode: string) {
-    setTimelineCode(normalizeCompanyCode(nextCode));
+    const normalizedCode = normalizeCompanyCode(nextCode);
+    setTimelineCode(normalizedCode);
+    setTimelineDraftCode(normalizedCode);
+    setReviewModalOpen(false);
+    setFinancialFactsModalOpen(false);
+    setSideNavOpen(false);
+    setActiveView("timeline");
   }
 
   useEffect(() => {
@@ -1211,6 +1226,12 @@ function App() {
       setError(err instanceof Error ? err.message : "Failed to load company timeline"),
     );
   }, [activeTimelineCode, appliedCriteria]);
+
+  useEffect(() => {
+    if (activeView === "timeline" && !timelineDraftCode && activeTimelineCode) {
+      setTimelineDraftCode(activeTimelineCode);
+    }
+  }, [activeTimelineCode, activeView, timelineDraftCode]);
 
   useEffect(() => {
     const activeDate = dateFrom || dateTo;
@@ -1288,6 +1309,146 @@ function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [financialFactsModalOpen, reviewModalOpen, reviewSaving, sideNavOpen]);
+
+  function submitTimelineSearch(event: FormEvent) {
+    event.preventDefault();
+    const normalizedCode = normalizeCompanyCode(timelineDraftCode);
+    setTimelineCode(normalizedCode);
+    setTimelineDraftCode(normalizedCode);
+    if (!normalizedCode) {
+      setTimeline(null);
+      return;
+    }
+    if (normalizedCode === activeTimelineCode) {
+      loadCompanyTimeline(normalizedCode).catch((err) =>
+        setError(err instanceof Error ? err.message : "Failed to load company timeline"),
+      );
+    }
+  }
+
+  function openTimelineDisclosure(item: CompanyTimelineDisclosure) {
+    if (item.best_parse_job_id === null) {
+      return;
+    }
+    selectParseJob(item.best_parse_job_id);
+    changeView("documents");
+  }
+
+  function renderTimelineRows(): ReactNode {
+    return (
+      <>
+        {timeline?.results.map((item) => {
+          const canOpenParse = item.best_parse_job_id !== null;
+          return (
+            <button
+              key={item.disclosure_id}
+              className={`timeline-row ${item.best_parse_job_id === selectedId ? "selected" : ""}`}
+              type="button"
+              title={canOpenParse ? "Open best parse for this disclosure" : "No parsed text available"}
+              disabled={!canOpenParse}
+              onClick={() => openTimelineDisclosure(item)}
+            >
+              <div className="timeline-row-main">
+                <span className="date">{item.disclosure_date}</span>
+                <span className="time">{item.time}</span>
+                <span className="timeline-row-title">{item.title}</span>
+              </div>
+              {item.tags.length ? (
+                <div className="tag-chip-list timeline-tags">
+                  {item.tags.slice(0, 3).map((tag) => (
+                    <span
+                      key={tag.slug}
+                      className={`tag-chip ${tag.is_primary ? "primary" : ""}`}
+                      title={`${tag.label_en} · ${tag.source}`}
+                    >
+                      {tag.label_ja}
+                    </span>
+                  ))}
+                  {item.tags.length > 3 ? (
+                    <span className="tag-chip">+{formatNumber(item.tags.length - 3)}</span>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="timeline-row-meta">
+                <span>{summarizeTimelineFiles(item)}</span>
+                <span>{summarizeTimelineParsers(item)}</span>
+                {renderFinancialFactsBadge(item.financial_facts)}
+                {renderReviewDecisionBadge(item.review_decision)}
+              </div>
+              {item.snippet ? (
+                <div className="timeline-snippet">
+                  {renderHighlightedText(item.snippet, appliedCriteria.textQuery)}
+                </div>
+              ) : null}
+            </button>
+          );
+        })}
+        {!timelineLoading && timeline && !timeline.results.length ? (
+          <div className="timeline-empty">No disclosures matched.</div>
+        ) : null}
+        {!timelineLoading && !timeline ? <div className="timeline-empty">Select a company code.</div> : null}
+      </>
+    );
+  }
+
+  function renderCompanyTimelinePanel(className = "timeline-panel"): ReactNode {
+    return (
+      <section className={className} aria-label="Company timeline">
+        <div className="timeline-header">
+          <div className="timeline-title">
+            <Building2 size={16} />
+            <strong>{activeTimelineCode || "Company"}</strong>
+            <span>
+              {timelineLoading
+                ? "Loading"
+                : timeline
+                  ? `${timeline.company_name ?? "Unknown"} · ${formatNumber(timeline.total)} disclosures`
+                  : "No company selected"}
+            </span>
+          </div>
+          <button
+            className="square-button"
+            type="button"
+            title="Refresh company timeline"
+            disabled={!activeTimelineCode}
+            onClick={() => loadCompanyTimeline()}
+          >
+            <RefreshCw size={16} />
+          </button>
+        </div>
+        <div className="timeline-list">{renderTimelineRows()}</div>
+      </section>
+    );
+  }
+
+  function renderTimelineView(): ReactNode {
+    return (
+      <main className="timeline-workspace">
+        <section className="timeline-page-header">
+          <div className="timeline-title">
+            <Building2 size={18} />
+            <strong>Company Timeline</strong>
+            <span>{activeTimelineCode ? `Selected company ${activeTimelineCode}` : "No company selected"}</span>
+          </div>
+          <form className="timeline-search-form" onSubmit={submitTimelineSearch}>
+            <label className="field">
+              <span>Code</span>
+              <input
+                value={timelineDraftCode}
+                onChange={(event) => setTimelineDraftCode(event.target.value)}
+                placeholder={activeTimelineCode || "21600"}
+              />
+            </label>
+            <button className="icon-button primary" type="submit" disabled={timelineLoading}>
+              <Search size={17} />
+              <span>{timelineLoading ? "Loading" : "Load"}</span>
+            </button>
+          </form>
+        </section>
+        {renderCompanyTimelinePanel("timeline-panel timeline-page-panel")}
+      </main>
+    );
+  }
 
   function renderParserQualityMetrics(): ReactNode {
     return (
@@ -1589,6 +1750,8 @@ function App() {
             title={
               activeView === "documents"
                 ? "Postgres-backed parsed text cache"
+                : activeView === "timeline"
+                  ? "Company timeline"
                 : activeView === "parserQuality"
                   ? "Parser quality jobs"
                   : "Persisted pipeline runs"
@@ -1596,6 +1759,8 @@ function App() {
           >
             {activeView === "documents" ? (
               <Database size={16} />
+            ) : activeView === "timeline" ? (
+              <Building2 size={16} />
             ) : activeView === "parserQuality" ? (
               <Activity size={16} />
             ) : (
@@ -1604,6 +1769,10 @@ function App() {
             <span>
               {activeView === "documents"
                 ? `${formatNumber(textRowCount)} text rows`
+                : activeView === "timeline"
+                  ? activeTimelineCode
+                    ? `${activeTimelineCode} · ${formatNumber(timeline?.total ?? 0)} disclosures`
+                    : "No company"
                 : activeView === "parserQuality"
                   ? `${formatNumber(parserQuality?.total_jobs ?? 0)} parser jobs`
                   : `${formatNumber(pipelineTotal)} runs`}
@@ -1640,6 +1809,14 @@ function App() {
               >
                 <FileText size={18} />
                 <span>Documents</span>
+              </button>
+              <button
+                className={activeView === "timeline" ? "selected" : ""}
+                type="button"
+                onClick={() => changeView("timeline")}
+              >
+                <Building2 size={18} />
+                <span>Timeline</span>
               </button>
               <button
                 className={activeView === "parserQuality" ? "selected" : ""}
@@ -1765,7 +1942,13 @@ function App() {
 
       <div className={`error-band ${error ? "" : "empty"}`}>{error}</div>
 
-      {activeView === "pipeline" ? renderPipelineView() : activeView === "parserQuality" ? renderParserQualityView() : (
+      {activeView === "pipeline" ? (
+        renderPipelineView()
+      ) : activeView === "parserQuality" ? (
+        renderParserQualityView()
+      ) : activeView === "timeline" ? (
+        renderTimelineView()
+      ) : (
       <main className="workspace">
         <aside className="results-pane">
           <section className="calendar-panel" aria-label="Report calendar">
@@ -1845,86 +2028,6 @@ function App() {
                   </button>
                 );
               })}
-            </div>
-          </section>
-          <section className="timeline-panel" aria-label="Company timeline">
-            <div className="timeline-header">
-              <div className="timeline-title">
-                <Building2 size={16} />
-                <strong>{activeTimelineCode || "Company"}</strong>
-                <span>
-                  {timelineLoading
-                    ? "Loading"
-                    : timeline
-                      ? `${timeline.company_name ?? "Unknown"} · ${formatNumber(timeline.total)} disclosures`
-                      : "No company selected"}
-                </span>
-              </div>
-              <button
-                className="square-button"
-                type="button"
-                title="Refresh company timeline"
-                disabled={!activeTimelineCode}
-                onClick={() => loadCompanyTimeline()}
-              >
-                <RefreshCw size={16} />
-              </button>
-            </div>
-            <div className="timeline-list">
-              {timeline?.results.map((item) => {
-                const canOpenParse = item.best_parse_job_id !== null;
-                return (
-                  <button
-                    key={item.disclosure_id}
-                    className={`timeline-row ${item.best_parse_job_id === selectedId ? "selected" : ""}`}
-                    type="button"
-                    title={canOpenParse ? "Open best parse for this disclosure" : "No parsed text available"}
-                    disabled={!canOpenParse}
-                    onClick={() => {
-                      if (item.best_parse_job_id !== null) {
-                        selectParseJob(item.best_parse_job_id);
-                      }
-                    }}
-                  >
-                    <div className="timeline-row-main">
-                      <span className="date">{item.disclosure_date}</span>
-                      <span className="time">{item.time}</span>
-                      <span className="timeline-row-title">{item.title}</span>
-                    </div>
-                    {item.tags.length ? (
-                      <div className="tag-chip-list timeline-tags">
-                        {item.tags.slice(0, 3).map((tag) => (
-                          <span
-                            key={tag.slug}
-                            className={`tag-chip ${tag.is_primary ? "primary" : ""}`}
-                            title={`${tag.label_en} · ${tag.source}`}
-                          >
-                            {tag.label_ja}
-                          </span>
-                        ))}
-                        {item.tags.length > 3 ? (
-                          <span className="tag-chip">+{formatNumber(item.tags.length - 3)}</span>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    <div className="timeline-row-meta">
-                      <span>{summarizeTimelineFiles(item)}</span>
-                      <span>{summarizeTimelineParsers(item)}</span>
-                      {renderFinancialFactsBadge(item.financial_facts)}
-                      {renderReviewDecisionBadge(item.review_decision)}
-                    </div>
-                    {item.snippet ? (
-                      <div className="timeline-snippet">
-                        {renderHighlightedText(item.snippet, appliedCriteria.textQuery)}
-                      </div>
-                    ) : null}
-                  </button>
-                );
-              })}
-              {!timelineLoading && timeline && !timeline.results.length ? (
-                <div className="timeline-empty">No disclosures matched.</div>
-              ) : null}
-              {!timelineLoading && !timeline ? <div className="timeline-empty">Select a company code.</div> : null}
             </div>
           </section>
           <div className="pane-header">
