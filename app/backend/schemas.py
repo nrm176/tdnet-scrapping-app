@@ -276,3 +276,59 @@ class ParseJobDetailResponse(ParseSearchResult):
     text_path: str | None
     content_text: str
     pages: list[ParsedPageResponse]
+
+
+class PipelineRunStepResponse(BaseModel):
+    id: int
+    run_id: str
+    step_name: str
+    step_order: int = Field(ge=0)
+    status: str
+    command: str | None
+    reason: str | None
+    metrics: dict[str, object] = Field(default_factory=dict)
+    error_context: str | None
+    exit_code: int | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    elapsed_seconds: float | None
+
+
+class PipelineRunSummaryResponse(BaseModel):
+    run_id: str
+    status: str
+    requested_start_date: date | None
+    effective_start_date: date | None
+    end_date: date | None
+    date_count: int = Field(ge=0)
+    checkpoint_applied: bool
+    checkpoint_disabled_reason: str | None
+    options: dict[str, object] = Field(default_factory=dict)
+    limits: dict[str, object] = Field(default_factory=dict)
+    strategies: dict[str, object] = Field(default_factory=dict)
+    skip_flags: dict[str, object] = Field(default_factory=dict)
+    log_path: str
+    latest_log_path: str | None
+    started_at: datetime
+    finished_at: datetime | None
+    elapsed_seconds: float | None
+    failed_step: str | None
+    exit_code: int | None
+    last_error: str | None
+    step_count: int = Field(ge=0)
+    completed_steps: int = Field(ge=0)
+    failed_steps: int = Field(ge=0)
+    skipped_steps: int = Field(ge=0)
+
+
+class PipelineRunsResponse(BaseModel):
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
+    runs: list[PipelineRunSummaryResponse]
+
+
+class PipelineRunDetailResponse(PipelineRunSummaryResponse):
+    checkpoint_latest_date: date | None
+    checkpoint_start_date: date | None
+    steps: list[PipelineRunStepResponse]

@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.backend.routers.pipeline import router as pipeline_router
 from app.backend.routers.search import router as search_router
 from app.backend.schemas import HealthResponse
 from app.backend.search_setup import ensure_postgres_search_support
@@ -51,3 +52,4 @@ async def health(session: Annotated[AsyncSession, Depends(get_session)]) -> Heal
 
 
 app.include_router(search_router)
+app.include_router(pipeline_router)

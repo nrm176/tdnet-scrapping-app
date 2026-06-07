@@ -4,12 +4,15 @@ import {
   AlertTriangle,
   Building2,
   CalendarDays,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  Clock,
   Database,
   ExternalLink,
   FileText,
+  History,
   RefreshCw,
   Save,
   Search,
@@ -17,6 +20,8 @@ import {
 } from "lucide-react";
 import {
   fetchCompanyTimeline,
+  fetchPipelineRun,
+  fetchPipelineRuns,
   fetchParseJob,
   fetchParsers,
   fetchParserQuality,
@@ -34,6 +39,9 @@ import type {
   FinancialFactsAnalysis,
   FinancialFactValue,
   FinancialMetricDelta,
+  PipelineRunDetail,
+  PipelineRunStep,
+  PipelineRunSummary,
   ParseJobDetail,
   ParseReviewDecision,
   ParseSearchResult,
@@ -75,6 +83,7 @@ type SearchCriteriaOverrides = Partial<Omit<SearchCriteria, "tags">> & {
 };
 
 type ReviewStateFilterValue = "" | ReviewStateFilter;
+type AppView = "documents" | "pipeline";
 
 const EMPTY_CRITERIA: SearchCriteria = {
   titleQuery: "",
@@ -117,6 +126,78 @@ function parseParserKey(value: string): ParserSelection {
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
+}
+
+function formatElapsed(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) {
+    return "Not finished";
+  }
+  const rounded = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const secs = rounded % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes.toString().padStart(2, "0")}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${secs.toString().padStart(2, "0")}s`;
+  }
+  return `${secs}s`;
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return "Not finished";
+  }
+  return new Date(value).toLocaleString();
+}
+
+function pipelineStatusLabel(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function pipelineStatusClass(value: string): string {
+  return value.replaceAll("_", "-");
+}
+
+function renderPipelineStatusBadge(status: string): ReactNode {
+  return <span className={`pipeline-status-chip ${pipelineStatusClass(status)}`}>{pipelineStatusLabel(status)}</span>;
+}
+
+function summarizePipelineDateRange(run: PipelineRunSummary): string {
+  if (!run.effective_start_date && !run.end_date) {
+    return "No date range";
+  }
+  if (run.effective_start_date === run.end_date) {
+    return run.effective_start_date ?? run.end_date ?? "No date range";
+  }
+  return `${run.effective_start_date ?? "any"} to ${run.end_date ?? "any"}`;
+}
+
+function summarizeStepMetrics(step: PipelineRunStep): string {
+  const preferredKeys = [
+    "candidate_files",
+    "candidate_disclosures",
+    "candidate_parse_jobs",
+    "candidate_reports",
+    "downloaded_files",
+    "parsed_files",
+    "persisted_rows",
+    "tagged_reports",
+    "ocr_completed_files",
+    "failed_files",
+    "failed_parse_jobs",
+    "failed_reports",
+    "files_per_second",
+  ];
+  const entries = preferredKeys
+    .filter((key) => step.metrics[key] !== undefined)
+    .map((key) => [key, step.metrics[key]] as const);
+  const visibleEntries = entries.length ? entries : Object.entries(step.metrics).slice(0, 4);
+  return visibleEntries
+    .slice(0, 4)
+    .map(([key, value]) => `${key.replaceAll("_", " ")} ${String(value)}`)
+    .join(" · ");
 }
 
 function compactVersion(value: string): string {
@@ -548,6 +629,7 @@ function buildCalendarCells(monthKey: string): CalendarCell[] {
 }
 
 function App() {
+  const [activeView, setActiveView] = useState<AppView>("documents");
   const [parsers, setParsers] = useState<ParserOption[]>([]);
   const [parserQuality, setParserQuality] = useState<ParserQuality | null>(null);
   const [tags, setTags] = useState<ReportTag[]>([]);
@@ -583,6 +665,12 @@ function App() {
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [reviewSaving, setReviewSaving] = useState(false);
+  const [pipelineRuns, setPipelineRuns] = useState<PipelineRunSummary[]>([]);
+  const [pipelineTotal, setPipelineTotal] = useState(0);
+  const [selectedPipelineRunId, setSelectedPipelineRunId] = useState<string | null>(null);
+  const [pipelineDetail, setPipelineDetail] = useState<PipelineRunDetail | null>(null);
+  const [pipelineLoading, setPipelineLoading] = useState(false);
+  const [pipelineDetailLoading, setPipelineDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selectedPage = detail?.pages[pageIndex] ?? detail?.pages[0] ?? null;
@@ -701,6 +789,38 @@ function App() {
     const options = await fetchTags();
     setError(null);
     setTags(options.filter((option) => option.active));
+  }
+
+  async function loadPipelineRuns(nextSelectedRunId?: string | null) {
+    setPipelineLoading(true);
+    try {
+      const response = await fetchPipelineRuns({ limit: 25 });
+      setError(null);
+      setPipelineRuns(response.runs);
+      setPipelineTotal(response.total);
+      const nextId = nextSelectedRunId ?? selectedPipelineRunId ?? response.runs[0]?.run_id ?? null;
+      setSelectedPipelineRunId(nextId);
+      if (!nextId) {
+        setPipelineDetail(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load pipeline runs");
+    } finally {
+      setPipelineLoading(false);
+    }
+  }
+
+  async function loadPipelineRunDetail(runId: string) {
+    setPipelineDetailLoading(true);
+    try {
+      const response = await fetchPipelineRun(runId);
+      setError(null);
+      setPipelineDetail(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load pipeline run");
+    } finally {
+      setPipelineDetailLoading(false);
+    }
   }
 
   async function loadRecent() {
@@ -974,6 +1094,25 @@ function App() {
   }, [parsers.length, initialResultsLoaded]);
 
   useEffect(() => {
+    if (activeView === "pipeline" && !pipelineRuns.length) {
+      loadPipelineRuns().catch((err) => setError(err instanceof Error ? err.message : "Failed to load pipeline runs"));
+    }
+  }, [activeView]);
+
+  useEffect(() => {
+    if (activeView !== "pipeline") {
+      return;
+    }
+    if (!selectedPipelineRunId) {
+      setPipelineDetail(null);
+      return;
+    }
+    loadPipelineRunDetail(selectedPipelineRunId).catch((err) =>
+      setError(err instanceof Error ? err.message : "Failed to load pipeline run"),
+    );
+  }, [activeView, selectedPipelineRunId]);
+
+  useEffect(() => {
     if (parsers.length) {
       loadCalendar().catch((err) => setError(err instanceof Error ? err.message : "Failed to load calendar"));
     }
@@ -1043,19 +1182,194 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [reviewModalOpen, reviewSaving]);
 
+  function renderPipelineView(): ReactNode {
+    return (
+      <main className="pipeline-workspace">
+        <aside className="pipeline-runs-pane">
+          <div className="pane-header pipeline-pane-header">
+            <div className="match-summary">
+              <strong>{pipelineLoading ? "Loading..." : `${formatNumber(pipelineTotal)} runs`}</strong>
+              <span>{pipelineRuns.length} shown</span>
+            </div>
+            <button
+              className="square-button"
+              type="button"
+              title="Refresh pipeline runs"
+              disabled={pipelineLoading}
+              onClick={() => {
+                loadPipelineRuns(selectedPipelineRunId).catch((err) =>
+                  setError(err instanceof Error ? err.message : "Failed to load pipeline runs"),
+                );
+              }}
+            >
+              <RefreshCw size={16} />
+            </button>
+          </div>
+          <div className="pipeline-run-list">
+            {pipelineRuns.map((run) => (
+              <button
+                key={run.run_id}
+                className={`pipeline-run-row ${run.run_id === selectedPipelineRunId ? "selected" : ""}`}
+                type="button"
+                onClick={() => setSelectedPipelineRunId(run.run_id)}
+              >
+                <div className="pipeline-run-row-main">
+                  <span className="pipeline-run-id">{run.run_id}</span>
+                  {renderPipelineStatusBadge(run.status)}
+                </div>
+                <div className="pipeline-run-row-meta">
+                  <span>{summarizePipelineDateRange(run)}</span>
+                  <span>{formatElapsed(run.elapsed_seconds)}</span>
+                </div>
+                <div className="pipeline-run-row-meta">
+                  <span>
+                    {formatNumber(run.completed_steps)}/{formatNumber(run.step_count)} steps
+                  </span>
+                  {run.failed_steps ? <span>{formatNumber(run.failed_steps)} failed</span> : null}
+                  {run.skipped_steps ? <span>{formatNumber(run.skipped_steps)} skipped</span> : null}
+                </div>
+              </button>
+            ))}
+            {!pipelineLoading && !pipelineRuns.length ? (
+              <div className="empty-state">
+                <History size={22} />
+                <span>No pipeline runs have been persisted yet.</span>
+              </div>
+            ) : null}
+          </div>
+        </aside>
+
+        <section className="pipeline-detail-pane">
+          {pipelineDetailLoading ? (
+            <div className="loading-state">Loading pipeline run...</div>
+          ) : pipelineDetail ? (
+            <>
+              <div className="pipeline-detail-header">
+                <div>
+                  <div className="document-title">{pipelineDetail.run_id}</div>
+                  <div className="document-meta">
+                    <span>{formatDateTime(pipelineDetail.started_at)}</span>
+                    <span>{summarizePipelineDateRange(pipelineDetail)}</span>
+                    <span>{formatNumber(pipelineDetail.date_count)} days</span>
+                  </div>
+                </div>
+                <div className="pipeline-detail-actions">
+                  {renderPipelineStatusBadge(pipelineDetail.status)}
+                  <span className="status-pill compact">
+                    <Clock size={15} />
+                    <span>{formatElapsed(pipelineDetail.elapsed_seconds)}</span>
+                  </span>
+                </div>
+              </div>
+
+              <div className="pipeline-summary-grid" aria-label="Pipeline run summary">
+                <div>
+                  <span>Checkpoint</span>
+                  <strong>
+                    {pipelineDetail.checkpoint_applied
+                      ? `Applied ${pipelineDetail.checkpoint_start_date ?? ""}`
+                      : pipelineDetail.checkpoint_disabled_reason
+                        ? `Skipped ${pipelineDetail.checkpoint_disabled_reason}`
+                        : "Not applied"}
+                  </strong>
+                </div>
+                <div>
+                  <span>Steps</span>
+                  <strong>
+                    {formatNumber(pipelineDetail.completed_steps)}/{formatNumber(pipelineDetail.step_count)} completed
+                  </strong>
+                </div>
+                <div>
+                  <span>Failures</span>
+                  <strong>{pipelineDetail.failed_step ?? (pipelineDetail.failed_steps ? "Step failure" : "None")}</strong>
+                </div>
+                <div>
+                  <span>Log</span>
+                  <strong title={pipelineDetail.log_path}>{pipelineDetail.log_path}</strong>
+                </div>
+              </div>
+
+              <div className="pipeline-step-table" aria-label="Pipeline step summaries">
+                <div className="pipeline-step-table-header">
+                  <span>Step</span>
+                  <span>Status</span>
+                  <span>Elapsed</span>
+                  <span>Metrics</span>
+                </div>
+                {pipelineDetail.steps.map((step) => (
+                  <div className="pipeline-step-row" key={step.id}>
+                    <div>
+                      <strong>{step.step_name}</strong>
+                      <span title={step.command ?? step.reason ?? ""}>{step.command ?? step.reason ?? ""}</span>
+                    </div>
+                    <div>{renderPipelineStatusBadge(step.status)}</div>
+                    <span>{formatElapsed(step.elapsed_seconds)}</span>
+                    <span title={step.error_context ?? summarizeStepMetrics(step)}>
+                      {summarizeStepMetrics(step) || step.error_context || "No metrics"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="empty-review">
+              <History size={28} />
+              <span>Select a pipeline run to inspect step history.</span>
+            </div>
+          )}
+        </section>
+      </main>
+    );
+  }
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${activeView === "pipeline" ? "pipeline-shell" : ""}`}>
       <header className="topbar">
         <div>
           <h1>TDnet Review</h1>
-          <p>Search persisted parse text and inspect parser output against the source PDF.</p>
+          <p>
+            {activeView === "documents"
+              ? "Search persisted parse text and inspect parser output against the source PDF."
+              : "Inspect persisted all-in-one pipeline runs and step metrics."}
+          </p>
         </div>
-        <div className="status-pill" title="Postgres-backed parsed text cache">
-          <Database size={16} />
-          <span>{formatNumber(parsers.reduce((sum, option) => sum + option.parse_texts, 0))} text rows</span>
+        <div className="topbar-actions">
+          <div className="view-switch" aria-label="App view">
+            <button
+              className={activeView === "documents" ? "selected" : ""}
+              type="button"
+              onClick={() => {
+                setReviewModalOpen(false);
+                setActiveView("documents");
+              }}
+            >
+              <FileText size={15} />
+              <span>Documents</span>
+            </button>
+            <button
+              className={activeView === "pipeline" ? "selected" : ""}
+              type="button"
+              onClick={() => {
+                setReviewModalOpen(false);
+                setActiveView("pipeline");
+              }}
+            >
+              <History size={15} />
+              <span>Runs</span>
+            </button>
+          </div>
+          <div className="status-pill" title={activeView === "documents" ? "Postgres-backed parsed text cache" : "Persisted pipeline runs"}>
+            {activeView === "documents" ? <Database size={16} /> : <CheckCircle2 size={16} />}
+            <span>
+              {activeView === "documents"
+                ? `${formatNumber(parsers.reduce((sum, option) => sum + option.parse_texts, 0))} text rows`
+                : `${formatNumber(pipelineTotal)} runs`}
+            </span>
+          </div>
         </div>
       </header>
 
+      {activeView === "documents" ? (
       <section className="quality-strip" aria-label="Parser quality dashboard">
         <div className="quality-heading">
           <div className="quality-title">
@@ -1124,7 +1438,9 @@ function App() {
           </div>
         ) : null}
       </section>
+      ) : null}
 
+      {activeView === "documents" ? (
       <form className="search-band" onSubmit={runSearch}>
         <div className="search-fields">
           <label className="field field-title-query">
@@ -1223,9 +1539,11 @@ function App() {
           </div>
         </div>
       </form>
+      ) : null}
 
       <div className={`error-band ${error ? "" : "empty"}`}>{error}</div>
 
+      {activeView === "pipeline" ? renderPipelineView() : (
       <main className="workspace">
         <aside className="results-pane">
           <section className="calendar-panel" aria-label="Report calendar">
@@ -1604,6 +1922,7 @@ function App() {
           )}
         </section>
       </main>
+      )}
 
       {reviewModalOpen && detail ? (
         <div
