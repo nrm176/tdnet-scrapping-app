@@ -6,6 +6,7 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
+  ClipboardCheck,
   Database,
   ExternalLink,
   FileText,
@@ -574,6 +575,7 @@ function App() {
   const [reviewFormState, setReviewFormState] = useState<ReviewState>("needs_review");
   const [reviewNotes, setReviewNotes] = useState("");
   const [reviewer, setReviewer] = useState(() => window.localStorage.getItem("tdnet-reviewer") ?? "");
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [initialResultsLoaded, setInitialResultsLoaded] = useState(false);
   const [qualityLoading, setQualityLoading] = useState(false);
@@ -910,6 +912,16 @@ function App() {
     );
   }
 
+  function openReviewModal() {
+    if (!detail) {
+      return;
+    }
+    setReviewFormState(detail.review_decision?.review_state ?? "needs_review");
+    setReviewNotes(detail.review_decision?.notes ?? "");
+    setReviewer((current) => detail.review_decision?.reviewer ?? current);
+    setReviewModalOpen(true);
+  }
+
   async function saveReviewDecision() {
     if (!detail) {
       return;
@@ -927,6 +939,7 @@ function App() {
       }
       setError(null);
       applyReviewDecision(decision);
+      setReviewModalOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save review decision");
     } finally {
@@ -986,8 +999,10 @@ function App() {
   useEffect(() => {
     if (selectedId === null) {
       setDetail(null);
+      setReviewModalOpen(false);
       return;
     }
+    setReviewModalOpen(false);
     setDetailLoading(true);
     setPageIndex(0);
     const requestedPage = targetPage;
@@ -1014,6 +1029,19 @@ function App() {
     detail?.review_decision?.notes,
     detail?.review_decision?.reviewer,
   ]);
+
+  useEffect(() => {
+    if (!reviewModalOpen) {
+      return undefined;
+    }
+    function onKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape" && !reviewSaving) {
+        setReviewModalOpen(false);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [reviewModalOpen, reviewSaving]);
 
   return (
     <div className="app-shell">
@@ -1485,8 +1513,20 @@ function App() {
                       ))}
                     </div>
                   ) : null}
+                  <div className="document-review-summary">
+                    {renderReviewDecisionBadge(detail.review_decision)}
+                    <span>
+                      {detail.review_decision?.reviewed_at
+                        ? `Saved ${new Date(detail.review_decision.reviewed_at).toLocaleString()}`
+                        : "No saved decision"}
+                    </span>
+                  </div>
                 </div>
                 <div className="document-actions">
+                  <button className="icon-button primary" type="button" onClick={openReviewModal}>
+                    <ClipboardCheck size={17} />
+                    <span>Review</span>
+                  </button>
                   <button
                     className="icon-button"
                     type="button"
@@ -1502,56 +1542,6 @@ function App() {
                   </a>
                 </div>
               </div>
-
-              <section className="manual-review-panel" aria-label="Manual parse review">
-                <div className="manual-review-header">
-                  <div>
-                    <strong>Manual review</strong>
-                    <span>
-                      {detail.review_decision?.reviewed_at
-                        ? `Saved ${new Date(detail.review_decision.reviewed_at).toLocaleString()}`
-                        : "No saved decision"}
-                    </span>
-                  </div>
-                  {renderReviewDecisionBadge(detail.review_decision)}
-                </div>
-                <div className="manual-review-controls">
-                  <label className="field field-review-state">
-                    <span>State</span>
-                    <select
-                      value={reviewFormState}
-                      onChange={(event) => setReviewFormState(event.target.value as ReviewState)}
-                    >
-                      {REVIEW_STATE_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field reviewer-field">
-                    <span>Reviewer</span>
-                    <input value={reviewer} onChange={(event) => setReviewer(event.target.value)} />
-                  </label>
-                  <button
-                    className="icon-button primary review-save-button"
-                    type="button"
-                    disabled={reviewSaving}
-                    onClick={() => {
-                      saveReviewDecision().catch((err) =>
-                        setError(err instanceof Error ? err.message : "Failed to save review decision"),
-                      );
-                    }}
-                  >
-                    <Save size={17} />
-                    <span>{reviewSaving ? "Saving" : "Save"}</span>
-                  </button>
-                </div>
-                <label className="field review-notes">
-                  <span>Notes</span>
-                  <textarea value={reviewNotes} onChange={(event) => setReviewNotes(event.target.value)} />
-                </label>
-              </section>
 
               {renderFinancialFactsPanel(detail.financial_facts)}
 
@@ -1614,6 +1604,93 @@ function App() {
           )}
         </section>
       </main>
+
+      {reviewModalOpen && detail ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !reviewSaving) {
+              setReviewModalOpen(false);
+            }
+          }}
+        >
+          <section
+            className="review-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="review-modal-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="review-modal-header">
+              <div>
+                <strong id="review-modal-title">Manual review</strong>
+                <span>
+                  {detail.code} · {detail.company_name} · {detail.parser_name}
+                </span>
+              </div>
+              <button
+                className="square-button"
+                type="button"
+                title="Close review"
+                disabled={reviewSaving}
+                onClick={() => setReviewModalOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="review-modal-context">
+              <span>{detail.title}</span>
+              {renderReviewDecisionBadge(detail.review_decision)}
+            </div>
+            <form
+              className="review-modal-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                saveReviewDecision().catch((err) =>
+                  setError(err instanceof Error ? err.message : "Failed to save review decision"),
+                );
+              }}
+            >
+              <label className="field field-review-state">
+                <span>State</span>
+                <select
+                  value={reviewFormState}
+                  onChange={(event) => setReviewFormState(event.target.value as ReviewState)}
+                >
+                  {REVIEW_STATE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field reviewer-field">
+                <span>Reviewer</span>
+                <input value={reviewer} onChange={(event) => setReviewer(event.target.value)} />
+              </label>
+              <label className="field review-notes">
+                <span>Notes</span>
+                <textarea value={reviewNotes} onChange={(event) => setReviewNotes(event.target.value)} />
+              </label>
+              <div className="review-modal-actions">
+                <button
+                  className="icon-button"
+                  type="button"
+                  disabled={reviewSaving}
+                  onClick={() => setReviewModalOpen(false)}
+                >
+                  <span>Cancel</span>
+                </button>
+                <button className="icon-button primary review-save-button" type="submit" disabled={reviewSaving}>
+                  <Save size={17} />
+                  <span>{reviewSaving ? "Saving" : "Save"}</span>
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
