@@ -13,6 +13,7 @@ import {
   ExternalLink,
   FileText,
   History,
+  Menu,
   RefreshCw,
   Save,
   Search,
@@ -83,7 +84,19 @@ type SearchCriteriaOverrides = Partial<Omit<SearchCriteria, "tags">> & {
 };
 
 type ReviewStateFilterValue = "" | ReviewStateFilter;
-type AppView = "documents" | "pipeline";
+type AppView = "documents" | "parserQuality" | "pipeline";
+
+const VIEW_LABELS: Record<AppView, string> = {
+  documents: "Documents",
+  parserQuality: "Parser Quality",
+  pipeline: "Runs",
+};
+
+const VIEW_DESCRIPTIONS: Record<AppView, string> = {
+  documents: "Search persisted parse text and inspect parser output against the source PDF.",
+  parserQuality: "Inspect parser health, low-text outputs, fallback candidates, and recent parser errors.",
+  pipeline: "Inspect persisted all-in-one pipeline runs and step metrics.",
+};
 
 const EMPTY_CRITERIA: SearchCriteria = {
   titleQuery: "",
@@ -630,6 +643,7 @@ function buildCalendarCells(monthKey: string): CalendarCell[] {
 
 function App() {
   const [activeView, setActiveView] = useState<AppView>("documents");
+  const [sideNavOpen, setSideNavOpen] = useState(false);
   const [parsers, setParsers] = useState<ParserOption[]>([]);
   const [parserQuality, setParserQuality] = useState<ParserQuality | null>(null);
   const [tags, setTags] = useState<ReportTag[]>([]);
@@ -681,6 +695,7 @@ function App() {
     () => results.find((result) => result.parse_job_id === selectedId) ?? null,
     [results, selectedId],
   );
+  const textRowCount = useMemo(() => parsers.reduce((sum, option) => sum + option.parse_texts, 0), [parsers]);
   const documentPages = detail?.pages ?? [];
   const currentPage = documentPages[pageIndex]?.page ?? documentPages[0]?.page ?? 1;
   const activeTimelineCode = useMemo(
@@ -741,7 +756,7 @@ function App() {
     return items;
   }, [appliedCriteria, appliedParserLabel, tagLabelBySlug]);
   const selectedDate = dateFrom && dateFrom === dateTo ? dateFrom : "";
-  const visibleQualityParsers = useMemo(
+  const qualityParsers = useMemo(
     () =>
       [...(parserQuality?.parsers ?? [])]
         .sort(
@@ -749,11 +764,12 @@ function App() {
             right.parse_texts - left.parse_texts ||
             right.total_jobs - left.total_jobs ||
             right.failed_jobs - left.failed_jobs,
-        )
-        .slice(0, 4),
+        ),
     [parserQuality],
   );
   const latestParserError = parserQuality?.recent_errors[0] ?? null;
+  const appShellClass =
+    activeView === "documents" ? "documents-shell" : activeView === "parserQuality" ? "quality-shell" : "pipeline-shell";
 
   function buildCriteria(overrides: SearchCriteriaOverrides = {}): SearchCriteria {
     return {
@@ -1055,6 +1071,13 @@ function App() {
     setFinancialFactsModalOpen(true);
   }
 
+  function changeView(nextView: AppView) {
+    setReviewModalOpen(false);
+    setFinancialFactsModalOpen(false);
+    setSideNavOpen(false);
+    setActiveView(nextView);
+  }
+
   function rememberPdfPage(page: number, node: HTMLDivElement | null) {
     if (node) {
       pdfPageRefs.current.set(page, node);
@@ -1250,7 +1273,7 @@ function App() {
   }, [detail?.parse_job_id, pendingScrollPage]);
 
   useEffect(() => {
-    if (!reviewModalOpen && !financialFactsModalOpen) {
+    if (!reviewModalOpen && !financialFactsModalOpen && !sideNavOpen) {
       return undefined;
     }
     function onKeyDown(event: globalThis.KeyboardEvent) {
@@ -1259,11 +1282,148 @@ function App() {
       }
       if (event.key === "Escape") {
         setFinancialFactsModalOpen(false);
+        setSideNavOpen(false);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [financialFactsModalOpen, reviewModalOpen, reviewSaving]);
+  }, [financialFactsModalOpen, reviewModalOpen, reviewSaving, sideNavOpen]);
+
+  function renderParserQualityMetrics(): ReactNode {
+    return (
+      <div className="quality-metrics" aria-label="Parser quality metrics">
+        <div className="quality-metric">
+          <span>Total jobs</span>
+          <strong>{formatNumber(parserQuality?.total_jobs ?? 0)}</strong>
+        </div>
+        <div className="quality-metric">
+          <span>Completed</span>
+          <strong>{formatNumber(parserQuality?.completed_jobs ?? 0)}</strong>
+        </div>
+        <div className={`quality-metric ${(parserQuality?.failed_jobs ?? 0) > 0 ? "warning" : ""}`}>
+          <span>Failed</span>
+          <strong>{formatNumber(parserQuality?.failed_jobs ?? 0)}</strong>
+        </div>
+        <div className="quality-metric">
+          <span>Text rows</span>
+          <strong>{formatNumber(parserQuality?.parse_texts ?? 0)}</strong>
+        </div>
+        <div className={`quality-metric ${(parserQuality?.low_text_jobs ?? 0) > 0 ? "notice" : ""}`}>
+          <span>Low text</span>
+          <strong>{formatNumber(parserQuality?.low_text_jobs ?? 0)}</strong>
+        </div>
+        {(parserQuality?.fallback_candidates ?? []).map((candidate) => (
+          <div className="quality-metric notice" key={candidate.parser_name} title={candidate.description}>
+            <span>{candidate.name}</span>
+            <strong>{formatNumber(candidate.candidate_count)}</strong>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderParserQualityView(): ReactNode {
+    const fallbackCandidates = parserQuality?.fallback_candidates ?? [];
+    const recentErrors = parserQuality?.recent_errors ?? [];
+
+    return (
+      <main className="quality-workspace">
+        <section className="quality-page-header">
+          <div className="quality-title">
+            <Activity size={18} />
+            <strong>Parser Quality</strong>
+            <span>{qualityLoading ? "Loading" : `${formatNumber(parserQuality?.total_jobs ?? 0)} jobs`}</span>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            title="Refresh parser quality"
+            disabled={qualityLoading}
+            onClick={() => {
+              loadParserQuality().catch((err) =>
+                setError(err instanceof Error ? err.message : "Failed to load parser quality"),
+              );
+            }}
+          >
+            <RefreshCw size={17} />
+            <span>{qualityLoading ? "Refreshing" : "Refresh"}</span>
+          </button>
+        </section>
+
+        {renderParserQualityMetrics()}
+
+        <section className="quality-detail-grid">
+          <div className="quality-detail-panel">
+            <div className="quality-section-header">
+              <strong>Parser outputs</strong>
+              <span>{formatNumber(qualityParsers.length)} parsers</span>
+            </div>
+            <div className="quality-parser-list quality-parser-page-list">
+              {qualityParsers.map((parser) => (
+                <div className="quality-parser-row" key={`${parser.parser_name}:${parser.parser_version}`}>
+                  <div>
+                    <strong>{parser.parser_name}</strong>
+                    <span title={parser.parser_version}>{compactVersion(parser.parser_version)}</span>
+                  </div>
+                  <span>
+                    {formatNumber(parser.completed_jobs)}/{formatNumber(parser.total_jobs)} jobs ·{" "}
+                    {formatNumber(parser.parse_texts)} text · {formatNumber(parser.low_text_jobs)} low
+                  </span>
+                  <span>
+                    {formatNumber(parser.failed_jobs)} failed ·{" "}
+                    {parser.average_char_count === null
+                      ? "avg chars n/a"
+                      : `${formatNumber(Math.round(parser.average_char_count))} avg chars`}
+                  </span>
+                </div>
+              ))}
+              {!qualityLoading && !qualityParsers.length ? (
+                <div className="empty-state">
+                  <Activity size={22} />
+                  <span>No parser quality rows are available.</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="quality-detail-panel">
+            <div className="quality-section-header">
+              <strong>Fallback candidates</strong>
+              <span>{formatNumber(fallbackCandidates.length)} groups</span>
+            </div>
+            <div className="quality-candidate-list">
+              {fallbackCandidates.map((candidate) => (
+                <div className="quality-candidate-row" key={`${candidate.parser_name}:${candidate.parser_version}`}>
+                  <div>
+                    <strong>{candidate.name}</strong>
+                    <span>{formatNumber(candidate.candidate_count)} candidates</span>
+                  </div>
+                  <span>{candidate.description}</span>
+                </div>
+              ))}
+              {!fallbackCandidates.length ? <div className="quality-muted-row">No fallback candidates.</div> : null}
+            </div>
+
+            <div className="quality-section-header">
+              <strong>Recent errors</strong>
+              <span>{latestParserError ? formatDateTime(latestParserError.updated_at) : "None"}</span>
+            </div>
+            <div className="quality-error-list">
+              {recentErrors.slice(0, 5).map((errorItem) => (
+                <div className="quality-error" key={`${errorItem.parse_job_id}:${errorItem.updated_at}`} title={errorItem.error}>
+                  <AlertTriangle size={15} />
+                  <span>
+                    {errorItem.parser_name} #{errorItem.parse_job_id}: {errorItem.error}
+                  </span>
+                </div>
+              ))}
+              {!recentErrors.length ? <div className="quality-muted-row">No recent parser errors.</div> : null}
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   function renderPipelineView(): ReactNode {
     return (
@@ -1406,123 +1566,100 @@ function App() {
   }
 
   return (
-    <div className={`app-shell ${activeView === "pipeline" ? "pipeline-shell" : ""}`}>
+    <div className={`app-shell ${appShellClass}`}>
       <header className="topbar">
-        <div>
-          <h1>TDnet Review</h1>
-          <p>
-            {activeView === "documents"
-              ? "Search persisted parse text and inspect parser output against the source PDF."
-              : "Inspect persisted all-in-one pipeline runs and step metrics."}
-          </p>
+        <div className="topbar-heading">
+          <button
+            className="square-button nav-menu-button"
+            type="button"
+            title="Open navigation"
+            aria-expanded={sideNavOpen}
+            onClick={() => setSideNavOpen(true)}
+          >
+            <Menu size={19} />
+          </button>
+          <div>
+            <h1>{VIEW_LABELS[activeView]}</h1>
+            <p>{VIEW_DESCRIPTIONS[activeView]}</p>
+          </div>
         </div>
         <div className="topbar-actions">
-          <div className="view-switch" aria-label="App view">
-            <button
-              className={activeView === "documents" ? "selected" : ""}
-              type="button"
-              onClick={() => {
-                setReviewModalOpen(false);
-                setFinancialFactsModalOpen(false);
-                setActiveView("documents");
-              }}
-            >
-              <FileText size={15} />
-              <span>Documents</span>
-            </button>
-            <button
-              className={activeView === "pipeline" ? "selected" : ""}
-              type="button"
-              onClick={() => {
-                setReviewModalOpen(false);
-                setFinancialFactsModalOpen(false);
-                setActiveView("pipeline");
-              }}
-            >
-              <History size={15} />
-              <span>Runs</span>
-            </button>
-          </div>
-          <div className="status-pill" title={activeView === "documents" ? "Postgres-backed parsed text cache" : "Persisted pipeline runs"}>
-            {activeView === "documents" ? <Database size={16} /> : <CheckCircle2 size={16} />}
+          <div
+            className="status-pill"
+            title={
+              activeView === "documents"
+                ? "Postgres-backed parsed text cache"
+                : activeView === "parserQuality"
+                  ? "Parser quality jobs"
+                  : "Persisted pipeline runs"
+            }
+          >
+            {activeView === "documents" ? (
+              <Database size={16} />
+            ) : activeView === "parserQuality" ? (
+              <Activity size={16} />
+            ) : (
+              <CheckCircle2 size={16} />
+            )}
             <span>
               {activeView === "documents"
-                ? `${formatNumber(parsers.reduce((sum, option) => sum + option.parse_texts, 0))} text rows`
-                : `${formatNumber(pipelineTotal)} runs`}
+                ? `${formatNumber(textRowCount)} text rows`
+                : activeView === "parserQuality"
+                  ? `${formatNumber(parserQuality?.total_jobs ?? 0)} parser jobs`
+                  : `${formatNumber(pipelineTotal)} runs`}
             </span>
           </div>
         </div>
       </header>
 
-      {activeView === "documents" ? (
-      <section className="quality-strip" aria-label="Parser quality dashboard">
-        <div className="quality-heading">
-          <div className="quality-title">
-            <Activity size={16} />
-            <strong>Parser quality</strong>
-            <span>{qualityLoading ? "Loading" : `${formatNumber(parserQuality?.total_jobs ?? 0)} jobs`}</span>
-          </div>
-          <button
-            className="square-button"
-            type="button"
-            title="Refresh parser quality"
-            disabled={qualityLoading}
-            onClick={() => {
-              loadParserQuality().catch((err) =>
-                setError(err instanceof Error ? err.message : "Failed to load parser quality"),
-              );
-            }}
-          >
-            <RefreshCw size={16} />
-          </button>
-        </div>
-        <div className="quality-metrics">
-          <div className="quality-metric">
-            <span>Completed</span>
-            <strong>{formatNumber(parserQuality?.completed_jobs ?? 0)}</strong>
-          </div>
-          <div className={`quality-metric ${(parserQuality?.failed_jobs ?? 0) > 0 ? "warning" : ""}`}>
-            <span>Failed</span>
-            <strong>{formatNumber(parserQuality?.failed_jobs ?? 0)}</strong>
-          </div>
-          <div className="quality-metric">
-            <span>Text rows</span>
-            <strong>{formatNumber(parserQuality?.parse_texts ?? 0)}</strong>
-          </div>
-          <div className={`quality-metric ${(parserQuality?.low_text_jobs ?? 0) > 0 ? "notice" : ""}`}>
-            <span>Low text</span>
-            <strong>{formatNumber(parserQuality?.low_text_jobs ?? 0)}</strong>
-          </div>
-          {(parserQuality?.fallback_candidates ?? []).map((candidate) => (
-            <div className="quality-metric notice" key={candidate.parser_name} title={candidate.description}>
-              <span>{candidate.name}</span>
-              <strong>{formatNumber(candidate.candidate_count)}</strong>
-            </div>
-          ))}
-        </div>
-        <div className="quality-parser-list">
-          {visibleQualityParsers.map((parser) => (
-            <div className="quality-parser-row" key={`${parser.parser_name}:${parser.parser_version}`}>
+      {sideNavOpen ? (
+        <div
+          className="side-nav-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setSideNavOpen(false);
+            }
+          }}
+        >
+          <aside className="side-nav" role="dialog" aria-modal="true" aria-label="Navigation">
+            <div className="side-nav-header">
               <div>
-                <strong>{parser.parser_name}</strong>
-                <span title={parser.parser_version}>{compactVersion(parser.parser_version)}</span>
+                <strong>TDnet Review</strong>
+                <span>{VIEW_LABELS[activeView]}</span>
               </div>
-              <span>
-                {formatNumber(parser.completed_jobs)}/{formatNumber(parser.total_jobs)} jobs ·{" "}
-                {formatNumber(parser.parse_texts)} text · {formatNumber(parser.low_text_jobs)} low
-              </span>
+              <button className="square-button" type="button" title="Close navigation" onClick={() => setSideNavOpen(false)}>
+                <X size={18} />
+              </button>
             </div>
-          ))}
+            <nav className="side-nav-list" aria-label="Primary">
+              <button
+                className={activeView === "documents" ? "selected" : ""}
+                type="button"
+                onClick={() => changeView("documents")}
+              >
+                <FileText size={18} />
+                <span>Documents</span>
+              </button>
+              <button
+                className={activeView === "parserQuality" ? "selected" : ""}
+                type="button"
+                onClick={() => changeView("parserQuality")}
+              >
+                <Activity size={18} />
+                <span>Parser Quality</span>
+              </button>
+              <button
+                className={activeView === "pipeline" ? "selected" : ""}
+                type="button"
+                onClick={() => changeView("pipeline")}
+              >
+                <History size={18} />
+                <span>Runs</span>
+              </button>
+            </nav>
+          </aside>
         </div>
-        {latestParserError ? (
-          <div className="quality-error" title={latestParserError.error}>
-            <AlertTriangle size={15} />
-            <span>
-              {latestParserError.parser_name} #{latestParserError.parse_job_id}: {latestParserError.error}
-            </span>
-          </div>
-        ) : null}
-      </section>
       ) : null}
 
       {activeView === "documents" ? (
@@ -1628,7 +1765,7 @@ function App() {
 
       <div className={`error-band ${error ? "" : "empty"}`}>{error}</div>
 
-      {activeView === "pipeline" ? renderPipelineView() : (
+      {activeView === "pipeline" ? renderPipelineView() : activeView === "parserQuality" ? renderParserQualityView() : (
       <main className="workspace">
         <aside className="results-pane">
           <section className="calendar-panel" aria-label="Report calendar">
