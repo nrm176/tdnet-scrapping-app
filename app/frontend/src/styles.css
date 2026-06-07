@@ -1442,7 +1442,7 @@ textarea {
   margin-top: 6px;
 }
 
-.document-review-summary > span:not(.review-state-chip) {
+.document-review-timestamp {
   min-width: 0;
   overflow: hidden;
   color: #64707d;
@@ -1472,6 +1472,13 @@ textarea {
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 20px 48px rgba(15, 23, 42, 0.24);
+}
+
+.financial-facts-modal {
+  width: min(980px, 100%);
+  max-height: min(820px, calc(100vh - 48px));
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .review-modal-header {
@@ -1515,6 +1522,17 @@ textarea {
   padding: 10px 18px;
   border-bottom: 1px solid #edf0f4;
   background: #fbfcfd;
+}
+
+.financial-facts-modal .review-modal-context .fact-chip {
+  flex-shrink: 0;
+}
+
+.financial-facts-modal .facts-panel {
+  align-content: start;
+  padding: 16px 18px 18px;
+  overflow: auto;
+  border-bottom: 0;
 }
 
 .review-modal-form {
