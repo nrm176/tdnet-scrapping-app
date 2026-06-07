@@ -496,7 +496,7 @@ function renderFinancialFactsBadge(analysis: FinancialFactsAnalysis | null): Rea
   );
 }
 
-function renderFinancialFactsPanel(analysis: FinancialFactsAnalysis | null): ReactNode {
+function renderFinancialFactsPanel(analysis: FinancialFactsAnalysis | null, heading = "Financial facts"): ReactNode {
   const statusClass = financialFactStatusClass(analysis);
   const metricDeltas = analysis?.metric_deltas ?? [];
   const forecastFacts = analysis?.facts.filter((fact) => fact.type === "forecast_revision_row") ?? [];
@@ -515,7 +515,7 @@ function renderFinancialFactsPanel(analysis: FinancialFactsAnalysis | null): Rea
     <section className={`facts-panel ${statusClass}`} aria-label="Financial facts">
       <div className="facts-header">
         <div className="facts-title">
-          <strong>Financial facts</strong>
+          <strong>{heading}</strong>
           <span>
             {analysis
               ? `${analysis.status} · ${analysis.analyzer_name} · ${compactVersion(analysis.analyzer_version)}`
@@ -659,6 +659,7 @@ function App() {
   const [reviewNotes, setReviewNotes] = useState("");
   const [reviewer, setReviewer] = useState(() => window.localStorage.getItem("tdnet-reviewer") ?? "");
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [financialFactsModalOpen, setFinancialFactsModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [initialResultsLoaded, setInitialResultsLoaded] = useState(false);
   const [qualityLoading, setQualityLoading] = useState(false);
@@ -1042,7 +1043,16 @@ function App() {
     setReviewFormState(detail.review_decision?.review_state ?? "needs_review");
     setReviewNotes(detail.review_decision?.notes ?? "");
     setReviewer((current) => detail.review_decision?.reviewer ?? current);
+    setFinancialFactsModalOpen(false);
     setReviewModalOpen(true);
+  }
+
+  function openFinancialFactsModal() {
+    if (!detail) {
+      return;
+    }
+    setReviewModalOpen(false);
+    setFinancialFactsModalOpen(true);
   }
 
   function rememberPdfPage(page: number, node: HTMLDivElement | null) {
@@ -1191,9 +1201,11 @@ function App() {
       setDetail(null);
       setPendingScrollPage(null);
       setReviewModalOpen(false);
+      setFinancialFactsModalOpen(false);
       return;
     }
     setReviewModalOpen(false);
+    setFinancialFactsModalOpen(false);
     setDetailLoading(true);
     setPageIndex(0);
     setPendingScrollPage(null);
@@ -1238,17 +1250,20 @@ function App() {
   }, [detail?.parse_job_id, pendingScrollPage]);
 
   useEffect(() => {
-    if (!reviewModalOpen) {
+    if (!reviewModalOpen && !financialFactsModalOpen) {
       return undefined;
     }
     function onKeyDown(event: globalThis.KeyboardEvent) {
       if (event.key === "Escape" && !reviewSaving) {
         setReviewModalOpen(false);
       }
+      if (event.key === "Escape") {
+        setFinancialFactsModalOpen(false);
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [reviewModalOpen, reviewSaving]);
+  }, [financialFactsModalOpen, reviewModalOpen, reviewSaving]);
 
   function renderPipelineView(): ReactNode {
     return (
@@ -1408,6 +1423,7 @@ function App() {
               type="button"
               onClick={() => {
                 setReviewModalOpen(false);
+                setFinancialFactsModalOpen(false);
                 setActiveView("documents");
               }}
             >
@@ -1419,6 +1435,7 @@ function App() {
               type="button"
               onClick={() => {
                 setReviewModalOpen(false);
+                setFinancialFactsModalOpen(false);
                 setActiveView("pipeline");
               }}
             >
@@ -1901,7 +1918,12 @@ function App() {
                   ) : null}
                   <div className="document-review-summary">
                     {renderReviewDecisionBadge(detail.review_decision)}
-                    <span>
+                    {detail.financial_facts ? (
+                      renderFinancialFactsBadge(detail.financial_facts)
+                    ) : (
+                      <span className="fact-chip empty">Facts not analyzed</span>
+                    )}
+                    <span className="document-review-timestamp">
                       {detail.review_decision?.reviewed_at
                         ? `Saved ${new Date(detail.review_decision.reviewed_at).toLocaleString()}`
                         : "No saved decision"}
@@ -1912,6 +1934,10 @@ function App() {
                   <button className="icon-button primary" type="button" onClick={openReviewModal}>
                     <ClipboardCheck size={17} />
                     <span>Review</span>
+                  </button>
+                  <button className="icon-button" type="button" onClick={openFinancialFactsModal}>
+                    <Activity size={17} />
+                    <span>Financial facts</span>
                   </button>
                   <button
                     className="icon-button"
@@ -1928,8 +1954,6 @@ function App() {
                   </a>
                 </div>
               </div>
-
-              {renderFinancialFactsPanel(detail.financial_facts)}
 
               <div className="page-toolbar">
                 <span className="page-scroll-status">
@@ -2085,6 +2109,52 @@ function App() {
                 </button>
               </div>
             </form>
+          </section>
+        </div>
+      ) : null}
+
+      {financialFactsModalOpen && detail ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setFinancialFactsModalOpen(false);
+            }
+          }}
+        >
+          <section
+            className="review-modal financial-facts-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="financial-facts-modal-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="review-modal-header">
+              <div>
+                <strong id="financial-facts-modal-title">Financial facts</strong>
+                <span>
+                  {detail.code} · {detail.company_name} · {detail.parser_name}
+                </span>
+              </div>
+              <button
+                className="square-button"
+                type="button"
+                title="Close financial facts"
+                onClick={() => setFinancialFactsModalOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="review-modal-context">
+              <span>{detail.title}</span>
+              {detail.financial_facts ? (
+                renderFinancialFactsBadge(detail.financial_facts)
+              ) : (
+                <span className="fact-chip empty">Not analyzed</span>
+              )}
+            </div>
+            {renderFinancialFactsPanel(detail.financial_facts, "Analysis")}
           </section>
         </div>
       ) : null}
