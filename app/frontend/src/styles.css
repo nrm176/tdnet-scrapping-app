@@ -1733,15 +1733,20 @@ textarea {
 }
 
 .page-toolbar {
-  height: 42px;
+  min-height: 42px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 16px;
+  padding: 7px 16px;
   border-bottom: 1px solid #d8dee6;
   background: #fbfcfd;
   color: #52606f;
   font-size: 13px;
+}
+
+.page-scroll-status {
+  min-width: max-content;
+  font-weight: 760;
 }
 
 .page-toolbar-matches {
@@ -1761,12 +1766,27 @@ textarea {
 }
 
 .pdf-panel {
+  display: grid;
+  align-content: start;
+  gap: 16px;
   padding: 14px;
   border-right: 1px solid #d8dee6;
   background: #e7ebef;
+  scroll-padding-top: 14px;
 }
 
-.pdf-panel img {
+.pdf-page {
+  display: grid;
+  gap: 6px;
+}
+
+.page-label {
+  color: #52606f;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.pdf-page img {
   display: block;
   max-width: 100%;
   margin: 0 auto;
@@ -1775,11 +1795,27 @@ textarea {
 }
 
 .text-panel {
+  display: grid;
+  align-content: start;
+  gap: 12px;
   padding: 14px;
   background: #ffffff;
+  scroll-padding-top: 14px;
 }
 
-.text-panel pre {
+.parsed-page {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e9ef;
+}
+
+.parsed-page:last-child {
+  border-bottom: 0;
+}
+
+.parsed-page pre {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;

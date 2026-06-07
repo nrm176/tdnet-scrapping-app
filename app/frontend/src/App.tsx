@@ -1,4 +1,4 @@
-import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -654,6 +654,7 @@ function App() {
   const [detail, setDetail] = useState<ParseJobDetail | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [targetPage, setTargetPage] = useState<number | null>(null);
+  const [pendingScrollPage, setPendingScrollPage] = useState<number | null>(null);
   const [reviewFormState, setReviewFormState] = useState<ReviewState>("needs_review");
   const [reviewNotes, setReviewNotes] = useState("");
   const [reviewer, setReviewer] = useState(() => window.localStorage.getItem("tdnet-reviewer") ?? "");
@@ -672,13 +673,15 @@ function App() {
   const [pipelineLoading, setPipelineLoading] = useState(false);
   const [pipelineDetailLoading, setPipelineDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pdfPageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  const textPageRefs = useRef<Map<number, HTMLElement>>(new Map());
 
-  const selectedPage = detail?.pages[pageIndex] ?? detail?.pages[0] ?? null;
   const selectedResult = useMemo(
     () => results.find((result) => result.parse_job_id === selectedId) ?? null,
     [results, selectedId],
   );
-  const visibleText = selectedPage?.markdown || detail?.content_text || "";
+  const documentPages = detail?.pages ?? [];
+  const currentPage = documentPages[pageIndex]?.page ?? documentPages[0]?.page ?? 1;
   const activeTimelineCode = useMemo(
     () => normalizeCompanyCode(timelineCode || appliedCriteria.code || detail?.code || results[0]?.code || ""),
     [timelineCode, appliedCriteria.code, detail?.code, results],
@@ -1042,6 +1045,54 @@ function App() {
     setReviewModalOpen(true);
   }
 
+  function rememberPdfPage(page: number, node: HTMLDivElement | null) {
+    if (node) {
+      pdfPageRefs.current.set(page, node);
+    } else {
+      pdfPageRefs.current.delete(page);
+    }
+  }
+
+  function rememberTextPage(page: number, node: HTMLElement | null) {
+    if (node) {
+      textPageRefs.current.set(page, node);
+    } else {
+      textPageRefs.current.delete(page);
+    }
+  }
+
+  function jumpToDocumentPage(page: number) {
+    if (!detail) {
+      return;
+    }
+    setPageIndex(pageIndexForPage(detail, page));
+    setPendingScrollPage(page);
+  }
+
+  function syncPageFromScroll(container: HTMLElement, pageRefs: Map<number, HTMLElement | HTMLDivElement>) {
+    if (!detail?.pages.length) {
+      return;
+    }
+    const containerTop = container.getBoundingClientRect().top;
+    const threshold = containerTop + 28;
+    let nextPage = detail.pages[0].page;
+    for (const page of detail.pages) {
+      const node = pageRefs.get(page.page);
+      if (!node) {
+        continue;
+      }
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom >= threshold) {
+        nextPage = page.page;
+        break;
+      }
+    }
+    setPageIndex((current) => {
+      const nextIndex = pageIndexForPage(detail, nextPage);
+      return nextIndex === current ? current : nextIndex;
+    });
+  }
+
   async function saveReviewDecision() {
     if (!detail) {
       return;
@@ -1069,7 +1120,7 @@ function App() {
 
   function selectParseJob(parseJobId: number, page?: number) {
     if (detail?.parse_job_id === parseJobId && page !== undefined) {
-      setPageIndex(pageIndexForPage(detail, page));
+      jumpToDocumentPage(page);
       return;
     }
     setTargetPage(page ?? null);
@@ -1138,18 +1189,23 @@ function App() {
   useEffect(() => {
     if (selectedId === null) {
       setDetail(null);
+      setPendingScrollPage(null);
       setReviewModalOpen(false);
       return;
     }
     setReviewModalOpen(false);
     setDetailLoading(true);
     setPageIndex(0);
+    setPendingScrollPage(null);
     const requestedPage = targetPage;
     fetchParseJob(selectedId)
       .then((value) => {
         setError(null);
+        pdfPageRefs.current.clear();
+        textPageRefs.current.clear();
         setDetail(value);
         setPageIndex(requestedPage !== null ? pageIndexForPage(value, requestedPage) : 0);
+        setPendingScrollPage(requestedPage ?? value.pages[0]?.page ?? 1);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load parse job"))
       .finally(() => {
@@ -1168,6 +1224,18 @@ function App() {
     detail?.review_decision?.notes,
     detail?.review_decision?.reviewer,
   ]);
+
+  useEffect(() => {
+    if (!detail || pendingScrollPage === null) {
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      pdfPageRefs.current.get(pendingScrollPage)?.scrollIntoView({ block: "start", behavior: "smooth" });
+      textPageRefs.current.get(pendingScrollPage)?.scrollIntoView({ block: "start", behavior: "smooth" });
+      setPendingScrollPage(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [detail?.parse_job_id, pendingScrollPage]);
 
   useEffect(() => {
     if (!reviewModalOpen) {
@@ -1864,53 +1932,63 @@ function App() {
               {renderFinancialFactsPanel(detail.financial_facts)}
 
               <div className="page-toolbar">
-                <button
-                  className="square-button"
-                  type="button"
-                  title="Previous page"
-                  disabled={pageIndex <= 0}
-                  onClick={() => setPageIndex((value) => Math.max(0, value - 1))}
-                >
-                  <ChevronLeft size={18} />
-                </button>
-                <span>
-                  Page {selectedPage?.page ?? 1} of {Math.max(1, detail.pages.length)}
+                <span className="page-scroll-status">
+                  Page {currentPage} of {Math.max(1, detail.pages.length)}
                 </span>
                 {selectedResult?.matched_pages.length ? (
                   <div className="page-toolbar-matches" aria-label="Matched page jumps">
                     {selectedResult.matched_pages.map((match) => (
                       <button
-                        className={`page-match-button ${selectedPage?.page === match.page ? "selected" : ""}`}
+                        className={`page-match-button ${currentPage === match.page ? "selected" : ""}`}
                         type="button"
                         key={`${detail.parse_job_id}:${match.page}`}
                         title={match.snippet}
-                        onClick={() => setPageIndex(pageIndexForPage(detail, match.page))}
+                        onClick={() => jumpToDocumentPage(match.page)}
                       >
                         Page {match.page}
                       </button>
                     ))}
                   </div>
                 ) : null}
-                <button
-                  className="square-button"
-                  type="button"
-                  title="Next page"
-                  disabled={pageIndex >= detail.pages.length - 1}
-                  onClick={() => setPageIndex((value) => Math.min(detail.pages.length - 1, value + 1))}
-                >
-                  <ChevronRight size={18} />
-                </button>
               </div>
 
               <div className="review-grid">
-                <div className="pdf-panel">
-                  <img
-                    src={pageImageUrl(detail.parse_job_id, selectedPage?.page ?? 1)}
-                    alt={`PDF page ${selectedPage?.page ?? 1}`}
-                  />
+                <div
+                  className="pdf-panel"
+                  onScroll={(event) => syncPageFromScroll(event.currentTarget, pdfPageRefs.current)}
+                >
+                  {documentPages.map((page) => (
+                    <div className="pdf-page" key={page.page} ref={(node) => rememberPdfPage(page.page, node)}>
+                      <div className="page-label">Page {page.page}</div>
+                      <img
+                        loading="lazy"
+                        src={pageImageUrl(detail.parse_job_id, page.page)}
+                        alt={`PDF page ${page.page}`}
+                      />
+                    </div>
+                  ))}
                 </div>
-                <div className="text-panel">
-                  <pre>{renderHighlightedText(visibleText, appliedCriteria.textQuery)}</pre>
+                <div
+                  className="text-panel"
+                  onScroll={(event) => syncPageFromScroll(event.currentTarget, textPageRefs.current)}
+                >
+                  {documentPages.length ? (
+                    documentPages.map((page) => (
+                      <section
+                        className="parsed-page"
+                        key={page.page}
+                        ref={(node) => rememberTextPage(page.page, node)}
+                      >
+                        <div className="page-label">Page {page.page}</div>
+                        <pre>{renderHighlightedText(page.markdown, appliedCriteria.textQuery)}</pre>
+                      </section>
+                    ))
+                  ) : (
+                    <section className="parsed-page">
+                      <div className="page-label">Parsed text</div>
+                      <pre>{renderHighlightedText(detail.content_text, appliedCriteria.textQuery)}</pre>
+                    </section>
+                  )}
                 </div>
               </div>
             </>
