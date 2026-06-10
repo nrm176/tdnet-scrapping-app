@@ -86,6 +86,20 @@ type SearchCriteriaOverrides = Partial<Omit<SearchCriteria, "tags">> & {
 type ReviewStateFilterValue = "" | ReviewStateFilter;
 type AppView = "documents" | "timeline" | "parserQuality" | "pipeline";
 
+type UrlRouteState = {
+  view: AppView;
+  criteria: SearchCriteria;
+  hasDocumentCriteria: boolean;
+  selectedParseJobId: number | null;
+  documentPage: number | null;
+  timelineCode: string;
+  pipelineRunId: string | null;
+};
+
+type UrlStateOverrides = Partial<
+  Pick<UrlRouteState, "view" | "criteria" | "selectedParseJobId" | "documentPage" | "timelineCode" | "pipelineRunId">
+>;
+
 const VIEW_LABELS: Record<AppView, string> = {
   documents: "Documents",
   timeline: "Timeline",
@@ -126,6 +140,152 @@ const REVIEW_FILTER_OPTIONS: { value: ReviewStateFilterValue; label: string }[] 
   { value: "unreviewed", label: "Unreviewed" },
   ...REVIEW_STATE_OPTIONS,
 ];
+
+const APP_VIEW_PATHS: Record<AppView, string> = {
+  documents: "/documents",
+  timeline: "/timeline",
+  parserQuality: "/parser-quality",
+  pipeline: "/runs",
+};
+
+const ROUTE_REVIEW_FILTERS = new Set<ReviewStateFilterValue>(REVIEW_FILTER_OPTIONS.map((option) => option.value));
+
+function routeViewFromPath(pathname: string): AppView {
+  const normalizedPath = pathname.replace(/\/+$/, "") || "/";
+  if (normalizedPath === "/" || normalizedPath === APP_VIEW_PATHS.documents) {
+    return "documents";
+  }
+  if (normalizedPath === APP_VIEW_PATHS.timeline) {
+    return "timeline";
+  }
+  if (normalizedPath === APP_VIEW_PATHS.parserQuality) {
+    return "parserQuality";
+  }
+  if (normalizedPath === APP_VIEW_PATHS.pipeline) {
+    return "pipeline";
+  }
+  return "documents";
+}
+
+function parsePositiveInteger(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseTags(params: URLSearchParams): string[] {
+  const repeatedTags = params.getAll("tag");
+  const commaTags = params
+    .get("tags")
+    ?.split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  return Array.from(new Set([...repeatedTags, ...(commaTags ?? [])].filter(Boolean)));
+}
+
+function criteriaFromUrl(params: URLSearchParams, view: AppView): SearchCriteria {
+  const reviewState = params.get("review") ?? "";
+  const tagMode = params.get("tag_mode") === "all" ? "all" : "any";
+  return {
+    titleQuery: params.get("title") ?? "",
+    textQuery: params.get("text") ?? "",
+    code: view === "documents" ? normalizeCompanyCode(params.get("code") ?? "") : "",
+    dateFrom: params.get("from") ?? "",
+    dateTo: params.get("to") ?? "",
+    tags: parseTags(params),
+    tagMode,
+    reviewState: ROUTE_REVIEW_FILTERS.has(reviewState as ReviewStateFilterValue)
+      ? (reviewState as ReviewStateFilterValue)
+      : "",
+    parserValue: params.get("parser") ?? "",
+    bestOnly: params.get("best_only") !== "false",
+  };
+}
+
+function hasDocumentCriteria(criteria: SearchCriteria): boolean {
+  return (
+    Boolean(criteria.titleQuery) ||
+    Boolean(criteria.textQuery) ||
+    Boolean(criteria.code) ||
+    Boolean(criteria.dateFrom) ||
+    Boolean(criteria.dateTo) ||
+    criteria.tags.length > 0 ||
+    criteria.tagMode !== EMPTY_CRITERIA.tagMode ||
+    Boolean(criteria.reviewState) ||
+    Boolean(criteria.parserValue) ||
+    criteria.bestOnly !== EMPTY_CRITERIA.bestOnly
+  );
+}
+
+function readRouteState(): UrlRouteState {
+  if (typeof window === "undefined") {
+    return {
+      view: "documents",
+      criteria: EMPTY_CRITERIA,
+      hasDocumentCriteria: false,
+      selectedParseJobId: null,
+      documentPage: null,
+      timelineCode: "",
+      pipelineRunId: null,
+    };
+  }
+
+  const view = routeViewFromPath(window.location.pathname);
+  const params = new URLSearchParams(window.location.search);
+  const criteria = criteriaFromUrl(params, view);
+  return {
+    view,
+    criteria,
+    hasDocumentCriteria: view === "documents" && hasDocumentCriteria(criteria),
+    selectedParseJobId: view === "documents" ? parsePositiveInteger(params.get("parse")) : null,
+    documentPage: view === "documents" ? parsePositiveInteger(params.get("page")) : null,
+    timelineCode: view === "timeline" ? normalizeCompanyCode(params.get("code") ?? "") : "",
+    pipelineRunId: view === "pipeline" ? (params.get("run") ?? "") || null : null,
+  };
+}
+
+function appendUrlValue(params: URLSearchParams, key: string, value: string | number | null | undefined): void {
+  if (value === null || value === undefined || value === "") {
+    return;
+  }
+  params.set(key, String(value));
+}
+
+function buildRouteUrl(route: UrlRouteState): string {
+  const params = new URLSearchParams();
+
+  if (route.view === "documents") {
+    appendUrlValue(params, "title", route.criteria.titleQuery.trim());
+    appendUrlValue(params, "text", route.criteria.textQuery.trim());
+    appendUrlValue(params, "code", normalizeCompanyCode(route.criteria.code));
+    appendUrlValue(params, "from", route.criteria.dateFrom);
+    appendUrlValue(params, "to", route.criteria.dateTo);
+    route.criteria.tags.forEach((tag) => params.append("tag", tag));
+    if (route.criteria.tags.length && route.criteria.tagMode !== EMPTY_CRITERIA.tagMode) {
+      params.set("tag_mode", route.criteria.tagMode);
+    }
+    appendUrlValue(params, "review", route.criteria.reviewState);
+    appendUrlValue(params, "parser", route.criteria.parserValue);
+    if (!route.criteria.bestOnly) {
+      params.set("best_only", "false");
+    }
+    appendUrlValue(params, "parse", route.selectedParseJobId);
+    appendUrlValue(params, "page", route.selectedParseJobId ? route.documentPage : null);
+  }
+
+  if (route.view === "timeline") {
+    appendUrlValue(params, "code", normalizeCompanyCode(route.timelineCode));
+  }
+
+  if (route.view === "pipeline") {
+    appendUrlValue(params, "run", route.pipelineRunId);
+  }
+
+  const query = params.toString();
+  return `${APP_VIEW_PATHS[route.view]}${query ? `?${query}` : ""}`;
+}
 
 function parserKey(option: ParserOption): string {
   return `${option.parser_name}::${option.parser_version}`;
@@ -644,33 +804,43 @@ function buildCalendarCells(monthKey: string): CalendarCell[] {
 }
 
 function App() {
-  const [activeView, setActiveView] = useState<AppView>("documents");
+  const initialRouteRef = useRef<UrlRouteState>(readRouteState());
+  const suppressUrlSyncRef = useRef(false);
+  const lastUrlRef = useRef("");
+  const [activeView, setActiveView] = useState<AppView>(() => initialRouteRef.current.view);
   const [sideNavOpen, setSideNavOpen] = useState(false);
   const [parsers, setParsers] = useState<ParserOption[]>([]);
   const [parserQuality, setParserQuality] = useState<ParserQuality | null>(null);
   const [tags, setTags] = useState<ReportTag[]>([]);
-  const [parserValue, setParserValue] = useState("");
-  const [bestOnly, setBestOnly] = useState(true);
-  const [titleQuery, setTitleQuery] = useState("");
-  const [textQuery, setTextQuery] = useState("");
-  const [code, setCode] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [tagMode, setTagMode] = useState<"any" | "all">("any");
-  const [reviewStateFilter, setReviewStateFilter] = useState<ReviewStateFilterValue>("");
-  const [calendarMonth, setCalendarMonth] = useState(currentMonthKey());
+  const [parserValue, setParserValue] = useState(() => initialRouteRef.current.criteria.parserValue);
+  const [bestOnly, setBestOnly] = useState(() => initialRouteRef.current.criteria.bestOnly);
+  const [titleQuery, setTitleQuery] = useState(() => initialRouteRef.current.criteria.titleQuery);
+  const [textQuery, setTextQuery] = useState(() => initialRouteRef.current.criteria.textQuery);
+  const [code, setCode] = useState(() => initialRouteRef.current.criteria.code);
+  const [dateFrom, setDateFrom] = useState(() => initialRouteRef.current.criteria.dateFrom);
+  const [dateTo, setDateTo] = useState(() => initialRouteRef.current.criteria.dateTo);
+  const [selectedTags, setSelectedTags] = useState<string[]>(() => initialRouteRef.current.criteria.tags);
+  const [tagMode, setTagMode] = useState<"any" | "all">(() => initialRouteRef.current.criteria.tagMode);
+  const [reviewStateFilter, setReviewStateFilter] = useState<ReviewStateFilterValue>(
+    () => initialRouteRef.current.criteria.reviewState,
+  );
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const initialDate = initialRouteRef.current.criteria.dateFrom || initialRouteRef.current.criteria.dateTo;
+    return initialDate.length >= 7 ? initialDate.slice(0, 7) : currentMonthKey();
+  });
   const [calendarDays, setCalendarDays] = useState<ReportCalendarDay[]>([]);
-  const [timelineDraftCode, setTimelineDraftCode] = useState("");
-  const [timelineCode, setTimelineCode] = useState("");
+  const [timelineDraftCode, setTimelineDraftCode] = useState(() => initialRouteRef.current.timelineCode);
+  const [timelineCode, setTimelineCode] = useState(() => initialRouteRef.current.timelineCode);
   const [timeline, setTimeline] = useState<CompanyTimelineResponse | null>(null);
   const [results, setResults] = useState<ParseSearchResult[]>([]);
   const [total, setTotal] = useState(0);
-  const [appliedCriteria, setAppliedCriteria] = useState<SearchCriteria>(EMPTY_CRITERIA);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [appliedCriteria, setAppliedCriteria] = useState<SearchCriteria>(() =>
+    initialRouteRef.current.hasDocumentCriteria ? initialRouteRef.current.criteria : EMPTY_CRITERIA,
+  );
+  const [selectedId, setSelectedId] = useState<number | null>(() => initialRouteRef.current.selectedParseJobId);
   const [detail, setDetail] = useState<ParseJobDetail | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
-  const [targetPage, setTargetPage] = useState<number | null>(null);
+  const [targetPage, setTargetPage] = useState<number | null>(() => initialRouteRef.current.documentPage);
   const [pendingScrollPage, setPendingScrollPage] = useState<number | null>(null);
   const [reviewFormState, setReviewFormState] = useState<ReviewState>("needs_review");
   const [reviewNotes, setReviewNotes] = useState("");
@@ -686,7 +856,9 @@ function App() {
   const [reviewSaving, setReviewSaving] = useState(false);
   const [pipelineRuns, setPipelineRuns] = useState<PipelineRunSummary[]>([]);
   const [pipelineTotal, setPipelineTotal] = useState(0);
-  const [selectedPipelineRunId, setSelectedPipelineRunId] = useState<string | null>(null);
+  const [selectedPipelineRunId, setSelectedPipelineRunId] = useState<string | null>(
+    () => initialRouteRef.current.pipelineRunId,
+  );
   const [pipelineDetail, setPipelineDetail] = useState<PipelineRunDetail | null>(null);
   const [pipelineLoading, setPipelineLoading] = useState(false);
   const [pipelineDetailLoading, setPipelineDetailLoading] = useState(false);
@@ -795,6 +967,102 @@ function App() {
     };
   }
 
+  function currentRouteState(overrides: UrlStateOverrides = {}): UrlRouteState {
+    const nextView = overrides.view ?? activeView;
+    const nextCriteria = overrides.criteria ?? buildCriteria();
+    const nextSelectedParseJobId =
+      overrides.selectedParseJobId !== undefined ? overrides.selectedParseJobId : selectedId;
+    const nextDocumentPage =
+      overrides.documentPage !== undefined
+        ? overrides.documentPage
+        : nextSelectedParseJobId
+          ? currentPage
+          : null;
+    return {
+      view: nextView,
+      criteria: nextCriteria,
+      hasDocumentCriteria: nextView === "documents" && hasDocumentCriteria(nextCriteria),
+      selectedParseJobId: nextView === "documents" ? nextSelectedParseJobId : null,
+      documentPage: nextView === "documents" ? nextDocumentPage : null,
+      timelineCode:
+        nextView === "timeline"
+          ? normalizeCompanyCode((overrides.timelineCode ?? timelineCode) || activeTimelineCode || timelineDraftCode)
+          : "",
+      pipelineRunId:
+        nextView === "pipeline"
+          ? overrides.pipelineRunId !== undefined
+            ? overrides.pipelineRunId
+            : selectedPipelineRunId
+          : null,
+    };
+  }
+
+  function writeRouteUrl(overrides: UrlStateOverrides = {}, mode: "push" | "replace" = "replace") {
+    if (suppressUrlSyncRef.current || typeof window === "undefined") {
+      return;
+    }
+    const nextUrl = buildRouteUrl(currentRouteState(overrides));
+    const currentUrl = `${window.location.pathname}${window.location.search}`;
+    if (nextUrl === currentUrl) {
+      return;
+    }
+    if (mode === "push") {
+      window.history.pushState(null, "", nextUrl);
+    } else {
+      window.history.replaceState(null, "", nextUrl);
+    }
+    lastUrlRef.current = nextUrl;
+  }
+
+  function applyRouteFormState(criteria: SearchCriteria) {
+    setTitleQuery(criteria.titleQuery);
+    setTextQuery(criteria.textQuery);
+    setCode(criteria.code);
+    setDateFrom(criteria.dateFrom);
+    setDateTo(criteria.dateTo);
+    setSelectedTags(criteria.tags);
+    setTagMode(criteria.tagMode);
+    setReviewStateFilter(criteria.reviewState);
+    setParserValue(criteria.parserValue);
+    setBestOnly(criteria.bestOnly);
+  }
+
+  function loadDocumentsForRoute(route: UrlRouteState) {
+    if (route.hasDocumentCriteria) {
+      runSearch(undefined, route.criteria, { selectedParseJobId: route.selectedParseJobId }).catch((err) =>
+        setError(err instanceof Error ? err.message : "Search failed"),
+      );
+      return;
+    }
+    loadRecent({ criteria: route.criteria, selectedParseJobId: route.selectedParseJobId }).catch((err) =>
+      setError(err instanceof Error ? err.message : "Failed to load recent parses"),
+    );
+  }
+
+  function applyRouteState(route: UrlRouteState) {
+    suppressUrlSyncRef.current = true;
+    lastUrlRef.current = buildRouteUrl(route);
+    setSideNavOpen(false);
+    setReviewModalOpen(false);
+    setFinancialFactsModalOpen(false);
+    setActiveView(route.view);
+    applyRouteFormState(route.criteria);
+    setTimelineCode(route.timelineCode);
+    setTimelineDraftCode(route.timelineCode);
+    setSelectedPipelineRunId(route.pipelineRunId);
+    setTargetPage(route.documentPage);
+    setSelectedId(route.selectedParseJobId);
+    if (route.hasDocumentCriteria) {
+      setAppliedCriteria(route.criteria);
+    }
+    if (parsers.length) {
+      loadDocumentsForRoute(route);
+    }
+    window.setTimeout(() => {
+      suppressUrlSyncRef.current = false;
+    }, 0);
+  }
+
   async function loadParsers() {
     const options = await fetchParsers();
     setError(null);
@@ -852,16 +1120,18 @@ function App() {
     }
   }
 
-  async function loadRecent() {
+  async function loadRecent(options: { criteria?: SearchCriteria; selectedParseJobId?: number | null } = {}) {
     setLoading(true);
     setError(null);
-    const criteria = buildCriteria({
-      titleQuery: "",
-      textQuery: "",
-      code: "",
-      dateFrom: "",
-      dateTo: "",
-    });
+    const criteria =
+      options.criteria ??
+      buildCriteria({
+        titleQuery: "",
+        textQuery: "",
+        code: "",
+        dateFrom: "",
+        dateTo: "",
+      });
     const selection = parseParserKey(criteria.parserValue);
     try {
       const response = await fetchReviewQueue({
@@ -874,7 +1144,7 @@ function App() {
       });
       setResults(response.results);
       setTotal(response.total);
-      setSelectedId(response.results[0]?.parse_job_id ?? null);
+      setSelectedId(options.selectedParseJobId ?? response.results[0]?.parse_job_id ?? null);
       setAppliedCriteria(criteria);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load review queue");
@@ -939,7 +1209,11 @@ function App() {
     }
   }
 
-  async function runSearch(event?: FormEvent, overrides: SearchCriteriaOverrides = {}) {
+  async function runSearch(
+    event?: FormEvent,
+    overrides: SearchCriteriaOverrides = {},
+    options: { selectedParseJobId?: number | null } = {},
+  ) {
     event?.preventDefault();
     setLoading(true);
     setError(null);
@@ -961,7 +1235,7 @@ function App() {
       });
       setResults(response.results);
       setTotal(response.total);
-      setSelectedId(response.results[0]?.parse_job_id ?? null);
+      setSelectedId(options.selectedParseJobId ?? response.results[0]?.parse_job_id ?? null);
       setAppliedCriteria(criteria);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed");
@@ -1080,7 +1354,8 @@ function App() {
     setFinancialFactsModalOpen(true);
   }
 
-  function changeView(nextView: AppView) {
+  function changeView(nextView: AppView, overrides: UrlStateOverrides = {}) {
+    writeRouteUrl({ ...overrides, view: nextView }, "push");
     setReviewModalOpen(false);
     setFinancialFactsModalOpen(false);
     setSideNavOpen(false);
@@ -1107,6 +1382,7 @@ function App() {
     if (!detail) {
       return;
     }
+    writeRouteUrl({ selectedParseJobId: detail.parse_job_id, documentPage: page }, "replace");
     setPageIndex(pageIndexForPage(detail, page));
     setPendingScrollPage(page);
   }
@@ -1165,12 +1441,16 @@ function App() {
       jumpToDocumentPage(page);
       return;
     }
+    if (activeView === "documents") {
+      writeRouteUrl({ selectedParseJobId: parseJobId, documentPage: page ?? null }, "replace");
+    }
     setTargetPage(page ?? null);
     setSelectedId(parseJobId);
   }
 
   function openCompanyTimeline(nextCode: string) {
     const normalizedCode = normalizeCompanyCode(nextCode);
+    writeRouteUrl({ view: "timeline", timelineCode: normalizedCode }, "push");
     setTimelineCode(normalizedCode);
     setTimelineDraftCode(normalizedCode);
     setReviewModalOpen(false);
@@ -1188,9 +1468,18 @@ function App() {
   useEffect(() => {
     if (parsers.length && !initialResultsLoaded) {
       setInitialResultsLoaded(true);
-      loadRecent().catch((err) => setError(err instanceof Error ? err.message : "Failed to load recent parses"));
+      loadDocumentsForRoute(initialRouteRef.current);
     }
   }, [parsers.length, initialResultsLoaded]);
+
+  useEffect(() => {
+    function onPopState() {
+      applyRouteState(readRouteState());
+    }
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [parsers.length]);
 
   useEffect(() => {
     if (activeView === "pipeline" && !pipelineRuns.length) {
@@ -1310,11 +1599,34 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [financialFactsModalOpen, reviewModalOpen, reviewSaving, sideNavOpen]);
 
+  useEffect(() => {
+    writeRouteUrl();
+  }, [
+    activeView,
+    titleQuery,
+    textQuery,
+    code,
+    dateFrom,
+    dateTo,
+    selectedTags,
+    tagMode,
+    reviewStateFilter,
+    parserValue,
+    bestOnly,
+    selectedId,
+    currentPage,
+    timelineCode,
+    timelineDraftCode,
+    activeTimelineCode,
+    selectedPipelineRunId,
+  ]);
+
   function submitTimelineSearch(event: FormEvent) {
     event.preventDefault();
     const normalizedCode = normalizeCompanyCode(timelineDraftCode);
     setTimelineCode(normalizedCode);
     setTimelineDraftCode(normalizedCode);
+    writeRouteUrl({ view: "timeline", timelineCode: normalizedCode }, "replace");
     if (!normalizedCode) {
       setTimeline(null);
       return;
@@ -1330,8 +1642,9 @@ function App() {
     if (item.best_parse_job_id === null) {
       return;
     }
-    selectParseJob(item.best_parse_job_id);
-    changeView("documents");
+    setTargetPage(null);
+    setSelectedId(item.best_parse_job_id);
+    changeView("documents", { selectedParseJobId: item.best_parse_job_id, documentPage: null });
   }
 
   function renderTimelineRows(): ReactNode {
@@ -1615,7 +1928,10 @@ function App() {
                 key={run.run_id}
                 className={`pipeline-run-row ${run.run_id === selectedPipelineRunId ? "selected" : ""}`}
                 type="button"
-                onClick={() => setSelectedPipelineRunId(run.run_id)}
+                onClick={() => {
+                  setSelectedPipelineRunId(run.run_id);
+                  writeRouteUrl({ view: "pipeline", pipelineRunId: run.run_id }, "replace");
+                }}
               >
                 <div className="pipeline-run-row-main">
                   <span className="pipeline-run-id">{run.run_id}</span>
@@ -1903,7 +2219,16 @@ function App() {
               <Search size={18} />
               <span>Search</span>
             </button>
-            <button className="icon-button" type="button" onClick={loadRecent} title="Load recent parse jobs">
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => {
+                loadRecent().catch((err) =>
+                  setError(err instanceof Error ? err.message : "Failed to load recent parses"),
+                );
+              }}
+              title="Load recent parse jobs"
+            >
               <RefreshCw size={18} />
             </button>
           </div>
