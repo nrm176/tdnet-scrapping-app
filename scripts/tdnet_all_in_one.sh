@@ -4,6 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+if [[ "${1:-}" != "--legacy-local" ]]; then
+  echo "This broad local pipeline is legacy; pass --legacy-local explicitly." >&2
+  exit 2
+fi
+shift
+
 DAYS="30"
 START_DATE=""
 END_DATE=""
@@ -37,7 +43,7 @@ DRY_RUN="false"
 
 usage() {
   cat <<'EOF'
-Run the TDnet pipeline end to end.
+Run the legacy TDnet pipeline end to end (explicit opt-in required).
 
 Default pipeline:
   1. Start Docker Postgres
@@ -49,7 +55,7 @@ Default pipeline:
   7. Classify reports with deterministic tags
 
 Usage:
-  scripts/tdnet_all_in_one.sh [options]
+  scripts/tdnet_all_in_one.sh --legacy-local [options]
 
 Date options:
   --days N                 Number of days through --end-date. Default: 30

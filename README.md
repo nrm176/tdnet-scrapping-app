@@ -110,6 +110,17 @@ substring search over `document_parse_texts.content_text`.
 
 ## CLI usage
 
+The normal daily entry captures one date into Research PostgreSQL 18. It only
+retrieves and stores validated TDnet metadata; document downloads and parsing
+remain separate stages:
+
+```bash
+scripts/tdnet_daily_metadata.sh --date 2026-09-10
+```
+
+The following direct commands are legacy/component operations for source-local
+maintenance and are not the normal daily entry:
+
 ```bash
 tdnet scrape --date 2026-05-15 --output-format structured
 tdnet scrape --date 2026-05-15 --persist
@@ -118,12 +129,11 @@ tdnet download --limit 100
 tdnet parse --limit 100 --workers 16
 ```
 
-Run the default end-to-end pipeline for the last 30 days. This starts
-Postgres, installs the local package if needed, scrapes, downloads, parses,
-persists searchable parse text, and updates report tags:
+The broad local pipeline is retained as an explicitly opt-in legacy workflow.
+It starts source-local Postgres and may download, parse, OCR, and tag artifacts:
 
 ```bash
-scripts/tdnet_all_in_one.sh
+scripts/tdnet_all_in_one.sh --legacy-local
 ```
 
 By default, the script reads the latest `tdnet_disclosures.disclosure_date`
@@ -135,14 +145,14 @@ already present. Use `--scrape-lookback-days N` to include overlap days, or
 Useful variants:
 
 ```bash
-scripts/tdnet_all_in_one.sh --days 7 --parse-workers 16
-scripts/tdnet_all_in_one.sh --start-date 2026-05-01 --end-date 2026-05-15 --retry-failed
-scripts/tdnet_all_in_one.sh --days 30 --force-scrape
-scripts/tdnet_all_in_one.sh --scrape-lookback-days 2
-scripts/tdnet_all_in_one.sh --with-ocr --with-review
-scripts/tdnet_all_in_one.sh --with-ixbrl --ixbrl-strategy garbled
-scripts/tdnet_all_in_one.sh --days 7 --retag
-scripts/tdnet_all_in_one_with_ocr.sh --days 7
+scripts/tdnet_all_in_one.sh --legacy-local --days 7 --parse-workers 16
+scripts/tdnet_all_in_one.sh --legacy-local --start-date 2026-05-01 --end-date 2026-05-15 --retry-failed
+scripts/tdnet_all_in_one.sh --legacy-local --days 30 --force-scrape
+scripts/tdnet_all_in_one.sh --legacy-local --scrape-lookback-days 2
+scripts/tdnet_all_in_one.sh --legacy-local --with-ocr --with-review
+scripts/tdnet_all_in_one.sh --legacy-local --with-ixbrl --ixbrl-strategy garbled
+scripts/tdnet_all_in_one.sh --legacy-local --days 7 --retag
+scripts/tdnet_all_in_one_with_ocr.sh --legacy-local --days 7
 ```
 
 The all-in-one script runs the main PDF parser by default and runs Apple Vision
@@ -317,7 +327,7 @@ identity directly, or opt into it during all-in-one runs:
 tdnet parse-ixbrl --strategy garbled --limit 100
 tdnet parse-ixbrl --strategy forecast-correction --limit 100
 tdnet parse-ixbrl --file-id 15820
-scripts/tdnet_all_in_one.sh --with-ixbrl --ixbrl-strategy garbled --ixbrl-limit 100
+scripts/tdnet_all_in_one.sh --legacy-local --with-ixbrl --ixbrl-strategy garbled --ixbrl-limit 100
 ```
 
 iXBRL parse jobs use parser name `tdnet-ixbrl-text` and parser version
@@ -1345,5 +1355,17 @@ This project is designed for:
 ---
 
 **Happy Scraping! 🎯**
+
+### Research Summary financial extraction
+
+After applying the additive Research migrations and storing an `xbrl_zip` artifact, extract the four supported TDnet Summary financial concepts with:
+
+```bash
+HFT_RESEARCH_DATABASE_URL='postgresql://tdnet_ingest:...@localhost:54790/hft_research' \
+python -m tdnet.research_summary --source-id 'https://www.release.tdnet.info/inbs/1401....pdf' \
+  --content-hash '<64-lowercase-hex-sha256>'
+```
+
+The command reads the exact stored artifact version, writes an idempotent raw extraction and typed fact projection, and leaves every row `ready_for_analysis=false`.
 
 *Built with modern Python patterns and comprehensive testing for reliable corporate disclosure data extraction.*

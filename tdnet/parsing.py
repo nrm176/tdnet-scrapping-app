@@ -14,7 +14,12 @@ from .models import TdnetDisclosure
 INBS_BASE_URL = f"{BASE_URL}/inbs/"
 
 
-def extract_structured_data_from_page(soup: BeautifulSoup, disclosure_date: date) -> List[TdnetDisclosure]:
+def extract_structured_data_from_page(
+    soup: BeautifulSoup,
+    disclosure_date: date,
+    *,
+    log_validation_errors: bool = True,
+) -> List[TdnetDisclosure]:
     """Parse BeautifulSoup of a page into structured TdnetDisclosure objects (first PDF per row)."""
     structured_data: List[TdnetDisclosure] = []
 
@@ -74,7 +79,8 @@ def extract_structured_data_from_page(soup: BeautifulSoup, disclosure_date: date
                 disclosure = TdnetDisclosure(**row_data)
                 structured_data.append(disclosure)
             except Exception as e:
-                logging.warning(f"Failed to create TdnetDisclosure object: {e}")
+                if log_validation_errors:
+                    logging.warning(f"Failed to create TdnetDisclosure object: {e}")
 
     logging.info(f"Extracted structured data for {len(structured_data)} disclosures on this page.")
     return structured_data
